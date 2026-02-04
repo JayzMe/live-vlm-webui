@@ -118,6 +118,18 @@ def get_session_callback(session_id: str):
     return callback
 
 
+def get_session_stream_callback(session_id: str):
+    """Return a stream_callback that sends partial VLM output only to this session."""
+
+    def callback(text: str, delta: str, metrics: dict):
+        send_to_session(
+            session_id,
+            json.dumps({"type": "vlm_stream", "text": text, "delta": delta, "metrics": metrics}),
+        )
+
+    return callback
+
+
 def is_port_available(port, host="0.0.0.0"):
     """Check if a port is available for binding"""
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -352,6 +364,7 @@ async def websocket_handler(request):
                 "api_base": svc.api_base,
                 "prompt": svc.prompt,
                 "process_every": _VPT.process_every_n_frames,
+                "streaming_enabled": svc.streaming_enabled,
                 "processing_mode": "periodic"
                 if _VPT.periodic_processing_enabled
                 else "trigger",
@@ -408,15 +421,32 @@ async def websocket_handler(request):
                             )
 
                     elif data.get("type") == "trigger_inference":
-                        global current_processor_track
-                        if current_processor_track is None:
+                        processor_track = get_or_create_session(session_id).get("processor_track")
+                        if processor_track is None:
                             await ws.send_json(
                                 {"type": "trigger_status", "status": "no_track"}
                             )
                         else:
-                            triggered = current_processor_track.trigger_inference()
+                            triggered = processor_track.trigger_inference()
                             status = "started" if triggered else "no_frame"
                             await ws.send_json({"type": "trigger_status", "status": status})
+
+                    elif data.get("type") == "update_streaming_mode":
+                        enabled = bool(data.get("enabled", False))
+                        if svc:
+                            previous = svc.streaming_enabled
+                            svc.streaming_enabled = enabled
+                            logger.info(
+                                f"[{session_id}] Streaming mode updated: "
+                                f"{'enabled' if previous else 'disabled'} → "
+                                f"{'enabled' if enabled else 'disabled'}"
+                            )
+                            await ws.send_json(
+                                {
+                                    "type": "streaming_mode_updated",
+                                    "enabled": enabled,
+                                }
+                            )
 
                     elif data.get("type") == "update_processing":
                         process_every = data.get("process_every", 30)
@@ -539,6 +569,26 @@ def broadcast_text_update(text: str, metrics: dict):
     websockets.difference_update(dead_websockets)
 
 
+def broadcast_stream_update(text: str, delta: str, metrics: dict):
+    """Broadcast streaming text updates to all connected WebSocket clients"""
+    if not websockets:
+        return
+
+    message = json.dumps(
+        {"type": "vlm_stream", "text": text, "delta": delta, "metrics": metrics}
+    )
+
+    dead_websockets = set()
+    for ws in websockets:
+        try:
+            asyncio.create_task(ws.send_str(message))
+        except Exception as e:
+            logger.error(f"Error sending to websocket: {e}")
+            dead_websockets.add(ws)
+
+    websockets.difference_update(dead_websockets)
+
+
 def broadcast_gpu_stats(stats: dict):
     """Broadcast GPU stats to all connected WebSocket clients"""
     if not websockets:
@@ -601,6 +651,7 @@ async def offer(request):
     session = get_or_create_session(session_id)
     session_vlm = session["vlm_service"]
     session_callback = get_session_callback(session_id)
+    session_stream_callback = get_session_stream_callback(session_id)
 
     # Create RTCPeerConnection with STUN servers for Docker/NAT compatibility
     config = RTCConfiguration(
@@ -650,10 +701,14 @@ async def offer(request):
             relayed_rtsp = relay.subscribe(rtsp_track)
 
             processor_track = VideoProcessorTrack(
-                relayed_rtsp, session_vlm, text_callback=session_callback
+                relayed_rtsp,
+                session_vlm,
+                text_callback=session_callback,
+                stream_callback=session_stream_callback,
             )
             global current_processor_track
             current_processor_track = processor_track
+            session["processor_track"] = processor_track
 
             # Add processor directly to peer connection
             pc.addTrack(processor_track)
@@ -675,10 +730,14 @@ async def offer(request):
             if track.kind == "video":
                 # Create processor track with this session's VLM and session-scoped callback
                 processor_track = VideoProcessorTrack(
-                    relay.subscribe(track), session_vlm, text_callback=session_callback
+                    relay.subscribe(track),
+                    session_vlm,
+                    text_callback=session_callback,
+                    stream_callback=session_stream_callback,
                 )
                 global current_processor_track
                 current_processor_track = processor_track
+                session["processor_track"] = processor_track
 
                 # Add processed track back to connection
                 pc.addTrack(processor_track)
@@ -747,11 +806,16 @@ async def rtsp_start(request):
         session = get_or_create_session(session_id)
         session_vlm = session["vlm_service"]
         session_callback = get_session_callback(session_id)
+        session_stream_callback = get_session_stream_callback(session_id)
         processor_track = VideoProcessorTrack(
-            rtsp_track, session_vlm, text_callback=session_callback
+            rtsp_track,
+            session_vlm,
+            text_callback=session_callback,
+            stream_callback=session_stream_callback,
         )
         global current_processor_track
         current_processor_track = processor_track
+        session["processor_track"] = processor_track
 
         # Start background task to consume frames
         async def consume_frames():

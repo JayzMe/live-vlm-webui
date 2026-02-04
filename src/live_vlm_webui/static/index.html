@@ -2100,6 +2100,21 @@ limitations under the License.
                             </label>
                         </div>
                     </div>
+
+                    <div class="settings-section">
+                        <div class="settings-section-title">VLM Output</div>
+
+                        <div class="settings-item">
+                            <div>
+                                <div class="settings-item-label">Stream VLM Output</div>
+                                <div class="settings-item-description">Show partial tokens as they arrive from the inference server</div>
+                            </div>
+                            <label class="toggle-switch">
+                                <input type="checkbox" id="streamingToggle">
+                                <span class="toggle-slider"></span>
+                            </label>
+                        </div>
+                    </div>
                 </div>
 
                 <!-- Column 2: Input Colors & WebRTC -->
@@ -2455,6 +2470,11 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
                                 <span>ms</span>
                             </div>
                             <div class="metric-item">
+                                <span>TTFT:</span>
+                                <span class="metric-value" id="ttftValue">--</span>
+                                <span>ms</span>
+                            </div>
+                            <div class="metric-item">
                                 <span>Avg:</span>
                                 <span class="metric-value" id="avgLatencyValue">--</span>
                                 <span>ms</span>
@@ -2574,6 +2594,7 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
         const markdownText = document.getElementById('markdownText');
         const copyButton = document.getElementById('copyButton');
         const latencyValue = document.getElementById('latencyValue');
+        const ttftValue = document.getElementById('ttftValue');
         const avgLatencyValue = document.getElementById('avgLatencyValue');
         const countValue = document.getElementById('countValue');
         const promptPreset = document.getElementById('promptPreset');
@@ -2595,6 +2616,7 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
         let lastText = '';
         // Multi-session: one ID per page/tab; sent in WebSocket and /offer so this tab gets only its VLM output
         const sessionId = crypto.randomUUID ? crypto.randomUUID() : 'tab-' + Date.now() + '-' + Math.random().toString(36).slice(2);
+        let streamingActive = false;
         let isAnalysisRunning = false;
         let selectedCameraId = null;
         let rtspSessionId = 'default';  // For RTSP mode
@@ -3085,6 +3107,7 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
         const popInToggle = document.getElementById('popInToggle');
         const glowToggle = document.getElementById('glowToggle');
         const fadeToggle = document.getElementById('fadeToggle');
+        const streamingToggle = document.getElementById('streamingToggle');
         const overlayPosition = document.getElementById('overlayPosition');
         const layoutOrder = document.getElementById('layoutOrder');
         const videoOverlay = document.getElementById('videoOverlay');
@@ -3095,6 +3118,7 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
             popIn: localStorage.getItem('popIn') !== 'false',
             glow: localStorage.getItem('glow') !== 'false',
             fade: localStorage.getItem('fade') !== 'false',
+            streamingEnabled: localStorage.getItem('streamingEnabled') === 'true',
             overlayPosition: localStorage.getItem('overlayPosition') || 'none',
             layoutOrder: localStorage.getItem('layoutOrder') || 'vlm-first',
             gpuUpdateInterval: parseFloat(localStorage.getItem('gpuUpdateInterval')) || 0.25
@@ -3104,6 +3128,7 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
         popInToggle.checked = settings.popIn;
         glowToggle.checked = settings.glow;
         fadeToggle.checked = settings.fade;
+        streamingToggle.checked = settings.streamingEnabled;
         overlayPosition.value = settings.overlayPosition;
         layoutOrder.value = settings.layoutOrder;
         gpuUpdateInterval.value = settings.gpuUpdateInterval;
@@ -3171,6 +3196,18 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
         fadeToggle.addEventListener('change', (e) => {
             settings.fade = e.target.checked;
             localStorage.setItem('fade', settings.fade);
+        });
+
+        streamingToggle.addEventListener('change', (e) => {
+            settings.streamingEnabled = e.target.checked;
+            localStorage.setItem('streamingEnabled', settings.streamingEnabled);
+
+            if (websocket && websocket.readyState === WebSocket.OPEN) {
+                websocket.send(JSON.stringify({
+                    type: 'update_streaming_mode',
+                    enabled: settings.streamingEnabled
+                }));
+            }
         });
 
         colorfulFocusToggle.addEventListener('change', (e) => {
@@ -4054,12 +4091,36 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
                     console.log('Initializing server with current model:', currentModel);
                     applyApiSettings({ showFeedback: false });
                 }
+
+                if (websocket && websocket.readyState === WebSocket.OPEN) {
+                    websocket.send(JSON.stringify({
+                        type: 'update_streaming_mode',
+                        enabled: settings.streamingEnabled
+                    }));
+                }
             };
 
             websocket.onmessage = (event) => {
                 const data = JSON.parse(event.data);
 
-                if (data.type === 'vlm_response') {
+                if (data.type === 'vlm_stream') {
+                    streamingActive = true;
+
+                    updateResultText(data.text);
+                    lastText = data.text;
+
+                    // Update video overlay (always, visibility is controlled by CSS)
+                    videoOverlay.textContent = data.text;
+
+                    if (data.metrics) {
+                        metricsInline.style.display = 'flex';
+                        latencyValue.textContent = Math.round(data.metrics.last_latency_ms || 0);
+                        ttftValue.textContent = Math.round(data.metrics.ttft_ms || 0);
+                        avgLatencyValue.textContent = Math.round(data.metrics.avg_latency_ms || 0);
+                        countValue.textContent = data.metrics.total_inferences || 0;
+                    }
+                } else if (data.type === 'vlm_response') {
+                    streamingActive = false;
                     // Trigger animations for new messages based on settings
                     if (data.text !== lastText) {
                         resultText.classList.remove('fade');
@@ -4105,6 +4166,7 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
                     if (data.metrics) {
                         metricsInline.style.display = 'flex';
                         latencyValue.textContent = Math.round(data.metrics.last_latency_ms);
+                        ttftValue.textContent = Math.round(data.metrics.ttft_ms || 0);
                         avgLatencyValue.textContent = Math.round(data.metrics.avg_latency_ms);
                         countValue.textContent = data.metrics.total_inferences;
                     }
@@ -4160,6 +4222,11 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
                     if (data.process_every != null && !isNaN(data.process_every)) {
                         processEvery.value = String(data.process_every);
                     }
+                    if (typeof data.streaming_enabled === 'boolean') {
+                        settings.streamingEnabled = data.streaming_enabled;
+                        localStorage.setItem('streamingEnabled', settings.streamingEnabled);
+                        streamingToggle.checked = settings.streamingEnabled;
+                    }
                     if (data.processing_mode) {
                         processMode.value = data.processing_mode;
                         setProcessingModeUI(data.processing_mode);
@@ -4189,6 +4256,12 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
                     if (data.mode) {
                         processMode.value = data.mode;
                         setProcessingModeUI(data.mode);
+                    }
+                } else if (data.type === 'streaming_mode_updated') {
+                    if (typeof data.enabled === 'boolean') {
+                        settings.streamingEnabled = data.enabled;
+                        localStorage.setItem('streamingEnabled', settings.streamingEnabled);
+                        streamingToggle.checked = settings.streamingEnabled;
                     }
                 } else if (data.type === 'trigger_status') {
                     if (!triggerInferenceBtn) {

@@ -41,6 +41,7 @@ class VLMService:
         api_key: str = "EMPTY",
         prompt: str = "Describe what you see in this image in one sentence.",
         max_tokens: int = 512,
+        streaming_enabled: bool = False,
     ):
         """
         Initialize VLM service
@@ -57,6 +58,7 @@ class VLMService:
         self.api_key = api_key if api_key else "EMPTY"
         self.prompt = prompt
         self.max_tokens = max_tokens
+        self.streaming_enabled = streaming_enabled
         self.client = AsyncOpenAI(base_url=api_base, api_key=api_key)
         self.current_response = "Initializing..."
         self.is_processing = False
@@ -66,6 +68,7 @@ class VLMService:
 
         # Metrics tracking
         self.last_inference_time = 0.0  # seconds
+        self.last_ttft_ms = 0.0
         self.total_inferences = 0
         self.total_inference_time = 0.0
 
@@ -160,6 +163,7 @@ class VLMService:
 
             # Update metrics
             self.last_inference_time = inference_time
+            self.last_ttft_ms = inference_time * 1000
             self.total_inferences += 1
             self.total_inference_time += inference_time
 
@@ -185,7 +189,123 @@ class VLMService:
         """
         return self._last_response_payload
 
-    async def process_frame(self, image: Image.Image, prompt: Optional[str] = None) -> None:
+    async def stream_analyze_image(
+        self,
+        image: Image.Image,
+        prompt: Optional[str] = None,
+        stream_callback=None,
+    ) -> str:
+        """
+        Analyze an image using the VLM model with streaming output.
+
+        Args:
+            image: PIL Image to analyze
+            prompt: Prompt for the VLM (uses default if None)
+            stream_callback: Optional callback invoked with partial text updates
+
+        Returns:
+            Generated response string
+        """
+        if prompt is None:
+            prompt = self.prompt
+
+        try:
+            start_time = time.perf_counter()
+            first_delta_time = None
+            partial_text = ""
+
+            # Convert PIL Image to base64
+            img_byte_arr = io.BytesIO()
+            image.save(img_byte_arr, format="JPEG")
+            img_byte_arr = img_byte_arr.getvalue()
+            img_base64 = base64.b64encode(img_byte_arr).decode("utf-8")
+
+            # Create message with image
+            image_url = f"data:image/jpeg;base64,{img_base64}"
+            messages = [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {"type": "image_url", "image_url": {"url": image_url}},
+                    ],
+                }
+            ]
+
+            truncate_len = 120
+            if len(img_base64) > truncate_len:
+                image_url_debug = f"data:image/jpeg;base64,{img_base64[:truncate_len]}...<{len(img_base64)} chars total>"
+            else:
+                image_url_debug = image_url
+            self._last_request_payload = {
+                "model": self.model,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": prompt},
+                            {"type": "image_url", "image_url": {"url": image_url_debug}},
+                        ],
+                    }
+                ],
+                "max_tokens": self.max_tokens,
+                "temperature": 0.7,
+                "stream": True,
+            }
+
+            response = await self.client.chat.completions.create(
+                model=self.model,
+                messages=messages,
+                max_tokens=self.max_tokens,
+                temperature=0.7,
+                stream=True,
+            )
+
+            async for chunk in response:
+                delta = chunk.choices[0].delta.content if chunk.choices else None
+                if not delta:
+                    continue
+
+                if first_delta_time is None:
+                    first_delta_time = time.perf_counter()
+                    self.last_ttft_ms = (first_delta_time - start_time) * 1000
+
+                partial_text += delta
+                if stream_callback:
+                    metrics = self.get_metrics()
+                    metrics["ttft_ms"] = self.last_ttft_ms
+                    stream_callback(partial_text, delta, metrics)
+
+            end_time = time.perf_counter()
+            inference_time = end_time - start_time
+
+            if first_delta_time is None:
+                self.last_ttft_ms = inference_time * 1000
+
+            self.last_inference_time = inference_time
+            self.total_inferences += 1
+            self.total_inference_time += inference_time
+
+            result = partial_text.strip()
+            self._last_response_payload = {
+                "model": self.model,
+                "choices": [
+                    {
+                        "message": {"role": "assistant", "content": result},
+                        "finish_reason": "stream_end",
+                    }
+                ],
+            }
+            logger.info(f"VLM response: {result} (latency: {inference_time*1000:.0f}ms)")
+            return result
+
+        except Exception as e:
+            logger.error(f"Error analyzing image: {e}")
+            return f"Error: {str(e)}"
+
+    async def process_frame(
+        self, image: Image.Image, prompt: Optional[str] = None, stream_callback=None
+    ) -> None:
         """
         Process a frame asynchronously. Updates self.current_response when done.
         If already processing, this call is skipped.
@@ -193,6 +313,7 @@ class VLMService:
         Args:
             image: PIL Image to process
             prompt: Optional custom prompt (uses default if None)
+            stream_callback: Optional callback for streaming updates
         """
         # Non-blocking check if we're already processing
         if self._processing_lock.locked():
@@ -202,7 +323,12 @@ class VLMService:
         async with self._processing_lock:
             self.is_processing = True
             try:
-                response = await self.analyze_image(image, prompt)
+                if self.streaming_enabled:
+                    response = await self.stream_analyze_image(
+                        image, prompt, stream_callback=stream_callback
+                    )
+                else:
+                    response = await self.analyze_image(image, prompt)
                 self.current_response = response
             finally:
                 self.is_processing = False
@@ -231,6 +357,7 @@ class VLMService:
             "last_latency_ms": self.last_inference_time * 1000,
             "avg_latency_ms": avg_latency * 1000,
             "total_inferences": self.total_inferences,
+            "ttft_ms": self.last_ttft_ms,
             "is_processing": self.is_processing,
         }
 
