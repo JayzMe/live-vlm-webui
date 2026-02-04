@@ -58,6 +58,7 @@ websockets = set()  # Track active WebSocket connections (all)
 gpu_monitor = None  # GPU monitoring instance
 gpu_monitor_task = None  # Background task for GPU monitoring
 rtsp_tracks = {}  # Track active RTSP streams {session_id: (rtsp_track, processor_track)}
+current_processor_track = None
 
 # Multi-session state (0.4.0)
 default_vlm_config = {}  # Set at startup; used to create new sessions
@@ -403,6 +404,17 @@ async def websocket_handler(request):
                                 }
                             )
 
+                    elif data.get("type") == "trigger_inference":
+                        global current_processor_track
+                        if current_processor_track is None:
+                            await ws.send_json(
+                                {"type": "trigger_status", "status": "no_track"}
+                            )
+                        else:
+                            triggered = current_processor_track.trigger_inference()
+                            status = "started" if triggered else "no_frame"
+                            await ws.send_json({"type": "trigger_status", "status": status})
+
                     elif data.get("type") == "update_processing":
                         process_every = data.get("process_every", 30)
                         try:
@@ -615,6 +627,8 @@ async def offer(request):
             processor_track = VideoProcessorTrack(
                 relayed_rtsp, session_vlm, text_callback=session_callback
             )
+            global current_processor_track
+            current_processor_track = processor_track
 
             # Add processor directly to peer connection
             pc.addTrack(processor_track)
@@ -638,6 +652,8 @@ async def offer(request):
                 processor_track = VideoProcessorTrack(
                     relay.subscribe(track), session_vlm, text_callback=session_callback
                 )
+                global current_processor_track
+                current_processor_track = processor_track
 
                 # Add processed track back to connection
                 pc.addTrack(processor_track)
@@ -709,6 +725,8 @@ async def rtsp_start(request):
         processor_track = VideoProcessorTrack(
             rtsp_track, session_vlm, text_callback=session_callback
         )
+        global current_processor_track
+        current_processor_track = processor_track
 
         # Start background task to consume frames
         async def consume_frames():

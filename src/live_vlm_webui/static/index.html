@@ -2377,6 +2377,11 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
                         <input type="number" id="maxTokens" value="512" min="1" max="4096" step="1">
                         <div class="input-hint">Lower for short answers (Yes/No: ~10), higher for detailed descriptions</div>
                     </div>
+                    <div class="form-group">
+                        <label>On-demand Inference</label>
+                        <button class="btn btn-secondary" id="triggerInferenceBtn" disabled>Run VLM on Current Frame</button>
+                        <div class="input-hint">Trigger an immediate inference without waiting for the interval.</div>
+                    </div>
                 </div>
             </div>
 
@@ -2566,11 +2571,13 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
         const promptPreset = document.getElementById('promptPreset');
         const promptText = document.getElementById('promptText');
         const maxTokens = document.getElementById('maxTokens');
+        const triggerInferenceBtn = document.getElementById('triggerInferenceBtn');
         const modelSelect = document.getElementById('modelSelect');
         const refreshModelsBtn = document.getElementById('refreshModelsBtn');
         const processEvery = document.getElementById('processEvery');
         const maxLatency = document.getElementById('maxLatency');
         const mirrorBtn = document.getElementById('mirrorBtn');
+        const triggerInferenceLabel = triggerInferenceBtn ? triggerInferenceBtn.textContent.trim() : '';
 
         let peerConnection = null;
         let localStream = null;
@@ -4135,6 +4142,27 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
                 } else if (data.type === 'processing_updated') {
                     if (data.process_every != null) processEvery.value = String(data.process_every);
                     console.log('Processing interval updated:', data.process_every);
+                } else if (data.type === 'trigger_status') {
+                    if (!triggerInferenceBtn) {
+                        return;
+                    }
+
+                    if (data.status === 'started') {
+                        triggerInferenceBtn.textContent = 'Triggered!';
+                    } else if (data.status === 'no_frame') {
+                        triggerInferenceBtn.textContent = 'No frame yet';
+                    } else if (data.status === 'no_track') {
+                        triggerInferenceBtn.textContent = 'No active stream';
+                    } else {
+                        triggerInferenceBtn.textContent = 'Trigger failed';
+                    }
+
+                    triggerInferenceBtn.disabled = !isAnalysisRunning;
+                    setTimeout(() => {
+                        if (triggerInferenceBtn) {
+                            triggerInferenceBtn.textContent = triggerInferenceLabel;
+                        }
+                    }, 900);
                 }
             };
 
@@ -4253,6 +4281,9 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
                 await peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
 
                 isAnalysisRunning = true;
+                if (triggerInferenceBtn) {
+                    triggerInferenceBtn.disabled = false;
+                }
                 updateStatus('Streaming', 'connected');
 
             } catch (error) {
@@ -4362,6 +4393,9 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
                 await peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
 
                 isAnalysisRunning = true;
+                if (triggerInferenceBtn) {
+                    triggerInferenceBtn.disabled = false;
+                }
 
                 // Disable RTSP URL field and Test button while streaming
                 rtspUrlInput.disabled = true;
@@ -4407,6 +4441,10 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
 
             isAnalysisRunning = false;
             updateStatus('Connected', 'connected');
+            if (triggerInferenceBtn) {
+                triggerInferenceBtn.disabled = true;
+                triggerInferenceBtn.textContent = triggerInferenceLabel;
+            }
 
             // Re-enable RTSP URL field and Test button
             const rtspUrlInput = document.getElementById('rtspUrl');
@@ -4432,8 +4470,17 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
         }
 
         // Sidebar start/stop buttons removed - using overlay buttons instead
-        // startBtn.addEventListener('click', start);
-        // stopBtn.addEventListener('click', stop);
+        if (triggerInferenceBtn) {
+            triggerInferenceBtn.addEventListener('click', () => {
+                if (!websocket || websocket.readyState !== WebSocket.OPEN) {
+                    alert('WebSocket is not connected yet.');
+                    return;
+                }
+                triggerInferenceBtn.disabled = true;
+                triggerInferenceBtn.textContent = 'Triggering...';
+                websocket.send(JSON.stringify({ type: 'trigger_inference' }));
+            });
+        }
 
         // Load on page load
         window.addEventListener('load', async () => {
