@@ -54,6 +54,7 @@ class VideoProcessorTrack(VideoStreamTrack):
         self.vlm_service = vlm_service
         self.text_callback = text_callback  # Callback to send text updates
         self.last_frame: Optional[np.ndarray] = None
+        self.latest_frame: Optional[av.VideoFrame] = None
         self.frame_count = 0
         self.dropped_frames = 0
         self.first_frame_pts = None  # Track first frame PTS to calculate relative time
@@ -67,6 +68,7 @@ class VideoProcessorTrack(VideoStreamTrack):
         try:
             # Get frame from incoming track
             frame = await self.track.recv()
+            self.latest_frame = frame
 
             # Initialize timing on first frame
             if self.first_frame_pts is None and frame.pts is not None:
@@ -182,6 +184,36 @@ class VideoProcessorTrack(VideoStreamTrack):
         except Exception as e:
             logger.error(f"Error processing frame: {e}", exc_info=True)
             raise
+
+    def trigger_inference(self, prompt: Optional[str] = None) -> bool:
+        """
+        Trigger a VLM inference on the most recent frame (on-demand).
+
+        Args:
+            prompt: Optional prompt override for this inference
+
+        Returns:
+            True if an inference task was queued, False if no frame is available
+        """
+        frame_source = self.latest_frame
+        img = None
+
+        if frame_source is not None:
+            try:
+                img = frame_source.to_ndarray(format="bgr24")
+            except Exception as e:
+                logger.warning(f"Failed to convert latest frame for trigger inference: {e}")
+
+        if img is None and self.last_frame is not None:
+            img = self.last_frame.copy()
+
+        if img is None:
+            return False
+
+        pil_img = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+        asyncio.create_task(self.vlm_service.process_frame(pil_img, prompt=prompt))
+        logger.info("Triggered VLM inference on current frame")
+        return True
 
     def _add_text_overlay(self, img: np.ndarray, text: str, status: str = "") -> np.ndarray:
         """
