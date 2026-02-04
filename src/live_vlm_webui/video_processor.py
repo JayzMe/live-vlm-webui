@@ -46,6 +46,8 @@ class VideoProcessorTrack(VideoStreamTrack):
 
     # Class variable for frame processing interval (can be updated dynamically)
     process_every_n_frames = 30
+    # Toggle for periodic processing vs trigger-only mode
+    periodic_processing_enabled = True
     # Max allowed latency before dropping frames (in seconds, 0 = disabled)
     max_frame_latency = 0.0
 
@@ -140,7 +142,10 @@ class VideoProcessorTrack(VideoStreamTrack):
             # Only convert to numpy when needed (for VLM processing or first frame)
             # This avoids expensive CPU color conversion on every frame
             interval = self.__class__.process_every_n_frames
-            need_conversion = (self.frame_count % interval == 0) or (self.frame_count == 1)
+            periodic_enabled = self.__class__.periodic_processing_enabled
+            need_conversion = periodic_enabled and (
+                (self.frame_count % interval == 0) or (self.frame_count == 1)
+            )
 
             if need_conversion:
                 t1 = time.time()
@@ -167,6 +172,11 @@ class VideoProcessorTrack(VideoStreamTrack):
                     # Fire and forget - don't wait for result
                     asyncio.create_task(self.vlm_service.process_frame(pil_img))
                     logger.info(f"Frame {self.frame_count}: Sending to VLM (interval={interval})")
+            elif self.frame_count == 1 and not periodic_enabled:
+                logger.info(
+                    "First frame received (periodic processing disabled): "
+                    f"{frame.width}x{frame.height}"
+                )
 
             # Get current response (may be old if VLM is still processing)
             response, is_processing = self.vlm_service.get_current_response()

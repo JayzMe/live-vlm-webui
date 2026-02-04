@@ -352,6 +352,9 @@ async def websocket_handler(request):
                 "api_base": svc.api_base,
                 "prompt": svc.prompt,
                 "process_every": _VPT.process_every_n_frames,
+                "processing_mode": "periodic"
+                if _VPT.periodic_processing_enabled
+                else "trigger",
                 "session_id": session_id,
             }
         )
@@ -453,6 +456,28 @@ async def websocket_handler(request):
                             f"{session_data.get('show_request_payload')}, response_payload="
                             f"{session_data.get('show_response_payload')}"
                         )
+
+                    elif data.get("type") == "update_processing_mode":
+                        mode = data.get("mode", "periodic").strip().lower()
+                        from .video_processor import VideoProcessorTrack
+
+                        if mode in {"periodic", "trigger"}:
+                            enabled = mode == "periodic"
+                            old_value = VideoProcessorTrack.periodic_processing_enabled
+                            VideoProcessorTrack.periodic_processing_enabled = enabled
+                            logger.info(
+                                "Processing mode updated: "
+                                f"{'periodic' if old_value else 'trigger'} → {mode}"
+                            )
+                            await ws.send_json(
+                                {
+                                    "type": "processing_mode_updated",
+                                    "mode": mode,
+                                    "periodic_enabled": enabled,
+                                }
+                            )
+                        else:
+                            logger.warning(f"Invalid processing mode: {mode}")
 
                     elif data.get("type") == "update_max_latency":
                         max_latency = data.get("max_latency", 0.0)
