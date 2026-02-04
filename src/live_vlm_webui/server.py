@@ -270,12 +270,18 @@ async def websocket_handler(request):
 
         # Send current server configuration
         if vlm_service:
+            from .video_processor import VideoProcessorTrack
+
             await ws.send_json(
                 {
                     "type": "server_config",
                     "model": vlm_service.model,
                     "api_base": vlm_service.api_base,
                     "prompt": vlm_service.prompt,
+                    "process_every": VideoProcessorTrack.process_every_n_frames,
+                    "processing_mode": "periodic"
+                    if VideoProcessorTrack.periodic_processing_enabled
+                    else "trigger",
                 }
             )
 
@@ -363,6 +369,28 @@ async def websocket_handler(request):
                                 )
                         except ValueError:
                             logger.error(f"Invalid processing interval: {process_every}")
+
+                    elif data.get("type") == "update_processing_mode":
+                        mode = data.get("mode", "periodic").strip().lower()
+                        from .video_processor import VideoProcessorTrack
+
+                        if mode in {"periodic", "trigger"}:
+                            enabled = mode == "periodic"
+                            old_value = VideoProcessorTrack.periodic_processing_enabled
+                            VideoProcessorTrack.periodic_processing_enabled = enabled
+                            logger.info(
+                                "Processing mode updated: "
+                                f"{'periodic' if old_value else 'trigger'} → {mode}"
+                            )
+                            await ws.send_json(
+                                {
+                                    "type": "processing_mode_updated",
+                                    "mode": mode,
+                                    "periodic_enabled": enabled,
+                                }
+                            )
+                        else:
+                            logger.warning(f"Invalid processing mode: {mode}")
 
                     elif data.get("type") == "update_max_latency":
                         max_latency = data.get("max_latency", 0.0)
