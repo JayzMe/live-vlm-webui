@@ -278,6 +278,7 @@ async def websocket_handler(request):
                     "model": vlm_service.model,
                     "api_base": vlm_service.api_base,
                     "prompt": vlm_service.prompt,
+                    "streaming_enabled": vlm_service.streaming_enabled,
                     "process_every": VideoProcessorTrack.process_every_n_frames,
                     "processing_mode": "periodic"
                     if VideoProcessorTrack.periodic_processing_enabled
@@ -345,6 +346,23 @@ async def websocket_handler(request):
                             triggered = current_processor_track.trigger_inference()
                             status = "started" if triggered else "no_frame"
                             await ws.send_json({"type": "trigger_status", "status": status})
+
+                    elif data.get("type") == "update_streaming_mode":
+                        enabled = bool(data.get("enabled", False))
+                        if vlm_service:
+                            previous = vlm_service.streaming_enabled
+                            vlm_service.streaming_enabled = enabled
+                            logger.info(
+                                "Streaming mode updated: "
+                                f"{'enabled' if previous else 'disabled'} → "
+                                f"{'enabled' if enabled else 'disabled'}"
+                            )
+                            await ws.send_json(
+                                {
+                                    "type": "streaming_mode_updated",
+                                    "enabled": enabled,
+                                }
+                            )
 
                     elif data.get("type") == "update_processing":
                         process_every = data.get("process_every", 30)
@@ -444,6 +462,26 @@ def broadcast_text_update(text: str, metrics: dict):
             dead_websockets.add(ws)
 
     # Clean up dead connections
+    websockets.difference_update(dead_websockets)
+
+
+def broadcast_stream_update(text: str, delta: str, metrics: dict):
+    """Broadcast streaming text updates to all connected WebSocket clients"""
+    if not websockets:
+        return
+
+    message = json.dumps(
+        {"type": "vlm_stream", "text": text, "delta": delta, "metrics": metrics}
+    )
+
+    dead_websockets = set()
+    for ws in websockets:
+        try:
+            asyncio.create_task(ws.send_str(message))
+        except Exception as e:
+            logger.error(f"Error sending to websocket: {e}")
+            dead_websockets.add(ws)
+
     websockets.difference_update(dead_websockets)
 
 
@@ -553,7 +591,10 @@ async def offer(request):
             relayed_rtsp = relay.subscribe(rtsp_track)
 
             processor_track = VideoProcessorTrack(
-                relayed_rtsp, vlm_service, text_callback=broadcast_text_update
+                relayed_rtsp,
+                vlm_service,
+                text_callback=broadcast_text_update,
+                stream_callback=broadcast_stream_update,
             )
             global current_processor_track
             current_processor_track = processor_track
@@ -578,7 +619,10 @@ async def offer(request):
             if track.kind == "video":
                 # Create processor track with VLM service and text callback
                 processor_track = VideoProcessorTrack(
-                    relay.subscribe(track), vlm_service, text_callback=broadcast_text_update
+                    relay.subscribe(track),
+                    vlm_service,
+                    text_callback=broadcast_text_update,
+                    stream_callback=broadcast_stream_update,
                 )
                 global current_processor_track
                 current_processor_track = processor_track
@@ -648,7 +692,10 @@ async def rtsp_start(request):
 
         # Create processor track (same as WebRTC path)
         processor_track = VideoProcessorTrack(
-            rtsp_track, vlm_service, text_callback=broadcast_text_update
+            rtsp_track,
+            vlm_service,
+            text_callback=broadcast_text_update,
+            stream_callback=broadcast_stream_update,
         )
         global current_processor_track
         current_processor_track = processor_track

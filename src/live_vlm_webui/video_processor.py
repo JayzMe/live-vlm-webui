@@ -50,11 +50,18 @@ class VideoProcessorTrack(VideoStreamTrack):
     # Max allowed latency before dropping frames (in seconds, 0 = disabled)
     max_frame_latency = 0.0
 
-    def __init__(self, track: VideoStreamTrack, vlm_service: VLMService, text_callback=None):
+    def __init__(
+        self,
+        track: VideoStreamTrack,
+        vlm_service: VLMService,
+        text_callback=None,
+        stream_callback=None,
+    ):
         super().__init__()
         self.track = track
         self.vlm_service = vlm_service
         self.text_callback = text_callback  # Callback to send text updates
+        self.stream_callback = stream_callback  # Callback for streaming text updates
         self.last_frame: Optional[np.ndarray] = None
         self.latest_frame: Optional[av.VideoFrame] = None
         self.frame_count = 0
@@ -169,7 +176,11 @@ class VideoProcessorTrack(VideoStreamTrack):
                     # Convert to PIL Image for VLM
                     pil_img = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
                     # Fire and forget - don't wait for result
-                    asyncio.create_task(self.vlm_service.process_frame(pil_img))
+                    asyncio.create_task(
+                        self.vlm_service.process_frame(
+                            pil_img, stream_callback=self.stream_callback
+                        )
+                    )
                     logger.info(f"Frame {self.frame_count}: Sending to VLM (interval={interval})")
             elif self.frame_count == 1 and not periodic_enabled:
                 logger.info(
@@ -184,7 +195,9 @@ class VideoProcessorTrack(VideoStreamTrack):
             metrics = self.vlm_service.get_metrics()
 
             # Send text update via callback (for WebSocket)
-            if self.text_callback:
+            if self.text_callback and not (
+                self.vlm_service.streaming_enabled and self.vlm_service.is_processing
+            ):
                 self.text_callback(response, metrics)
 
             # Return original frame directly - zero-copy passthrough!
@@ -221,7 +234,11 @@ class VideoProcessorTrack(VideoStreamTrack):
             return False
 
         pil_img = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
-        asyncio.create_task(self.vlm_service.process_frame(pil_img, prompt=prompt))
+        asyncio.create_task(
+            self.vlm_service.process_frame(
+                pil_img, prompt=prompt, stream_callback=self.stream_callback
+            )
+        )
         logger.info("Triggered VLM inference on current frame")
         return True
 
