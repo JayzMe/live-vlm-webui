@@ -2229,6 +2229,8 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
         let streamingActive = false;
         let triggerStartTime = null;
         let triggerPending = false;
+        let triggerBaselineInferenceCount = null;
+        let lastObservedInferenceCount = 0;
         let isAnalysisRunning = false;
         let selectedCameraId = null;
         let rtspSessionId = 'default';  // For RTSP mode
@@ -3267,9 +3269,41 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
             }
             triggerStartTime = performance.now();
             triggerPending = true;
+            triggerBaselineInferenceCount = lastObservedInferenceCount;
             if (triggerLatencyValue) {
                 triggerLatencyValue.textContent = '…';
             }
+        }
+
+        function shouldFinalizeTriggerRoundTrip(messageType, metrics) {
+            if (!triggerPending || triggerStartTime === null) {
+                return false;
+            }
+
+            if (!metrics || typeof metrics !== 'object') {
+                return false;
+            }
+
+            const isProcessing = !!metrics.is_processing;
+            const totalInferences = Number(metrics.total_inferences);
+
+            if (Number.isFinite(totalInferences)) {
+                lastObservedInferenceCount = Math.max(lastObservedInferenceCount, totalInferences);
+            }
+
+            // In streaming mode, first delta arrives while processing is active.
+            // This avoids accidentally using stale non-trigger responses.
+            if (messageType === 'vlm_stream') {
+                return isProcessing;
+            }
+
+            // In non-streaming mode, response is complete; inference count should increase.
+            if (messageType === 'vlm_response' && Number.isFinite(totalInferences)) {
+                const baseline = triggerBaselineInferenceCount ?? -1;
+                return totalInferences > baseline;
+            }
+
+            return false;
         }
 
         function finalizeTriggerRoundTrip() {
@@ -3673,7 +3707,9 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
 
                 if (data.type === 'vlm_stream') {
                     streamingActive = true;
-                    finalizeTriggerRoundTrip();
+                    if (shouldFinalizeTriggerRoundTrip(data.type, data.metrics)) {
+                        finalizeTriggerRoundTrip();
+                    }
 
                     updateResultText(data.text);
                     lastText = data.text;
@@ -3690,7 +3726,9 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
                     }
                 } else if (data.type === 'vlm_response') {
                     streamingActive = false;
-                    finalizeTriggerRoundTrip();
+                    if (shouldFinalizeTriggerRoundTrip(data.type, data.metrics)) {
+                        finalizeTriggerRoundTrip();
+                    }
                     // Trigger animations for new messages based on settings
                     if (data.text !== lastText) {
                         resultText.classList.remove('fade');
