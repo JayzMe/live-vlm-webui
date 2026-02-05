@@ -2101,6 +2101,11 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
                                 <span>Count:</span>
                                 <span class="metric-value" id="countValue">--</span>
                             </div>
+                            <div class="metric-item">
+                                <span>Trigger RT:</span>
+                                <span class="metric-value" id="triggerLatencyValue">--</span>
+                                <span>ms</span>
+                            </div>
                         </div>
                     </div>
             </div>
@@ -2203,6 +2208,7 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
         const ttftValue = document.getElementById('ttftValue');
         const avgLatencyValue = document.getElementById('avgLatencyValue');
         const countValue = document.getElementById('countValue');
+        const triggerLatencyValue = document.getElementById('triggerLatencyValue');
         const promptPreset = document.getElementById('promptPreset');
         const promptText = document.getElementById('promptText');
         const maxTokens = document.getElementById('maxTokens');
@@ -2221,6 +2227,8 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
         let fadeTimeout = null;
         let lastText = '';
         let streamingActive = false;
+        let triggerStartTime = null;
+        let triggerPending = false;
         let isAnalysisRunning = false;
         let selectedCameraId = null;
         let rtspSessionId = 'default';  // For RTSP mode
@@ -3240,6 +3248,40 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
             if (!isPeriodic) {
                 processEvery.classList.remove('applied');
             }
+            if (mode !== 'trigger') {
+                resetTriggerRoundTrip();
+            }
+        }
+
+        function resetTriggerRoundTrip() {
+            triggerStartTime = null;
+            triggerPending = false;
+            if (triggerLatencyValue) {
+                triggerLatencyValue.textContent = '--';
+            }
+        }
+
+        function beginTriggerRoundTrip() {
+            if (processMode.value !== 'trigger') {
+                return;
+            }
+            triggerStartTime = performance.now();
+            triggerPending = true;
+            if (triggerLatencyValue) {
+                triggerLatencyValue.textContent = '…';
+            }
+        }
+
+        function finalizeTriggerRoundTrip() {
+            if (!triggerPending || triggerStartTime === null) {
+                return;
+            }
+            const elapsedMs = performance.now() - triggerStartTime;
+            if (triggerLatencyValue) {
+                triggerLatencyValue.textContent = Math.round(elapsedMs);
+            }
+            triggerPending = false;
+            triggerStartTime = null;
         }
 
         // Auto-apply processing mode on change
@@ -3631,6 +3673,7 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
 
                 if (data.type === 'vlm_stream') {
                     streamingActive = true;
+                    finalizeTriggerRoundTrip();
 
                     updateResultText(data.text);
                     lastText = data.text;
@@ -3647,6 +3690,7 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
                     }
                 } else if (data.type === 'vlm_response') {
                     streamingActive = false;
+                    finalizeTriggerRoundTrip();
                     // Trigger animations for new messages based on settings
                     if (data.text !== lastText) {
                         resultText.classList.remove('fade');
@@ -3772,10 +3816,13 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
                     if (data.status === 'started') {
                         triggerInferenceBtn.textContent = 'Triggered!';
                     } else if (data.status === 'no_frame') {
+                        resetTriggerRoundTrip();
                         triggerInferenceBtn.textContent = 'No frame yet';
                     } else if (data.status === 'no_track') {
+                        resetTriggerRoundTrip();
                         triggerInferenceBtn.textContent = 'No active stream';
                     } else {
+                        resetTriggerRoundTrip();
                         triggerInferenceBtn.textContent = 'Trigger failed';
                     }
 
@@ -4051,6 +4098,7 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
             resultText.classList.remove('fade');
             videoOverlay.textContent = '';
             lastText = '';
+            resetTriggerRoundTrip();
         }
 
         startBtn.addEventListener('click', start);
@@ -4063,6 +4111,7 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
                 }
                 triggerInferenceBtn.disabled = true;
                 triggerInferenceBtn.textContent = 'Triggering...';
+                beginTriggerRoundTrip();
                 websocket.send(JSON.stringify({ type: 'trigger_inference' }));
             });
         }
