@@ -69,6 +69,15 @@ class VLMService:
         self.last_ttft_ms = 0.0
         self.total_inferences = 0
         self.total_inference_time = 0.0
+        self._next_inference_id = 1
+        self.active_inference_id: Optional[int] = None
+        self.last_completed_inference_id: Optional[int] = None
+
+    def reserve_inference_id(self) -> int:
+        """Reserve and return a unique inference ID."""
+        inference_id = self._next_inference_id
+        self._next_inference_id += 1
+        return inference_id
 
     async def analyze_image(self, image: Image.Image, prompt: Optional[str] = None) -> str:
         """
@@ -217,7 +226,11 @@ class VLMService:
             return f"Error: {str(e)}"
 
     async def process_frame(
-        self, image: Image.Image, prompt: Optional[str] = None, stream_callback=None
+        self,
+        image: Image.Image,
+        prompt: Optional[str] = None,
+        stream_callback=None,
+        inference_id: Optional[int] = None,
     ) -> None:
         """
         Process a frame asynchronously. Updates self.current_response when done.
@@ -227,6 +240,7 @@ class VLMService:
             image: PIL Image to process
             prompt: Optional custom prompt (uses default if None)
             stream_callback: Optional callback for streaming updates
+            inference_id: Optional pre-reserved inference ID for correlation
         """
         # Non-blocking check if we're already processing
         if self._processing_lock.locked():
@@ -234,7 +248,11 @@ class VLMService:
             return
 
         async with self._processing_lock:
+            if inference_id is None:
+                inference_id = self.reserve_inference_id()
+
             self.is_processing = True
+            self.active_inference_id = inference_id
             try:
                 if self.streaming_enabled:
                     response = await self.stream_analyze_image(
@@ -243,8 +261,10 @@ class VLMService:
                 else:
                     response = await self.analyze_image(image, prompt)
                 self.current_response = response
+                self.last_completed_inference_id = inference_id
             finally:
                 self.is_processing = False
+                self.active_inference_id = None
 
     def get_current_response(self) -> tuple[str, bool]:
         """
@@ -272,6 +292,8 @@ class VLMService:
             "total_inferences": self.total_inferences,
             "ttft_ms": self.last_ttft_ms,
             "is_processing": self.is_processing,
+            "active_inference_id": self.active_inference_id,
+            "last_completed_inference_id": self.last_completed_inference_id,
         }
 
     def update_prompt(self, new_prompt: str, max_tokens: Optional[int] = None) -> None:

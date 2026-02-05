@@ -208,7 +208,7 @@ class VideoProcessorTrack(VideoStreamTrack):
             logger.error(f"Error processing frame: {e}", exc_info=True)
             raise
 
-    def trigger_inference(self, prompt: Optional[str] = None) -> str:
+    def trigger_inference(self, prompt: Optional[str] = None) -> dict:
         """
         Trigger a VLM inference on the most recent frame (on-demand).
 
@@ -216,11 +216,13 @@ class VideoProcessorTrack(VideoStreamTrack):
             prompt: Optional prompt override for this inference
 
         Returns:
-            Status string: "started", "no_frame", or "busy"
+            Trigger status payload with keys:
+            - status: "started", "no_frame", or "busy"
+            - inference_id: reserved inference ID when status is "started"
         """
         if self.vlm_service.is_processing:
             logger.info("Ignoring trigger inference request: VLM is still processing")
-            return "busy"
+            return {"status": "busy"}
 
         frame_source = self.latest_frame
         img = None
@@ -235,16 +237,20 @@ class VideoProcessorTrack(VideoStreamTrack):
             img = self.last_frame.copy()
 
         if img is None:
-            return "no_frame"
+            return {"status": "no_frame"}
 
+        inference_id = self.vlm_service.reserve_inference_id()
         pil_img = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
         asyncio.create_task(
             self.vlm_service.process_frame(
-                pil_img, prompt=prompt, stream_callback=self.stream_callback
+                pil_img,
+                prompt=prompt,
+                stream_callback=self.stream_callback,
+                inference_id=inference_id,
             )
         )
-        logger.info("Triggered VLM inference on current frame")
-        return "started"
+        logger.info(f"Triggered VLM inference on current frame (id={inference_id})")
+        return {"status": "started", "inference_id": inference_id}
 
     def _add_text_overlay(self, img: np.ndarray, text: str, status: str = "") -> np.ndarray:
         """

@@ -2229,8 +2229,7 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
         let streamingActive = false;
         let triggerStartTime = null;
         let triggerPending = false;
-        let triggerBaselineInferenceCount = null;
-        let lastObservedInferenceCount = 0;
+        let pendingTriggerInferenceId = null;
         let isAnalysisRunning = false;
         let selectedCameraId = null;
         let rtspSessionId = 'default';  // For RTSP mode
@@ -3258,6 +3257,7 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
         function resetTriggerRoundTrip() {
             triggerStartTime = null;
             triggerPending = false;
+            pendingTriggerInferenceId = null;
             if (triggerLatencyValue) {
                 triggerLatencyValue.textContent = '--';
             }
@@ -3269,9 +3269,19 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
             }
             triggerStartTime = performance.now();
             triggerPending = true;
-            triggerBaselineInferenceCount = lastObservedInferenceCount;
+            pendingTriggerInferenceId = null;
             if (triggerLatencyValue) {
                 triggerLatencyValue.textContent = '…';
+            }
+        }
+
+        function bindTriggerInferenceId(inferenceId) {
+            if (!triggerPending) {
+                return;
+            }
+            const parsedId = Number(inferenceId);
+            if (Number.isFinite(parsedId) && parsedId > 0) {
+                pendingTriggerInferenceId = parsedId;
             }
         }
 
@@ -3284,23 +3294,19 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
                 return false;
             }
 
-            const isProcessing = !!metrics.is_processing;
-            const totalInferences = Number(metrics.total_inferences);
+            const activeInferenceId = Number(metrics.active_inference_id);
+            const completedInferenceId = Number(metrics.last_completed_inference_id);
 
-            if (Number.isFinite(totalInferences)) {
-                lastObservedInferenceCount = Math.max(lastObservedInferenceCount, totalInferences);
+            if (pendingTriggerInferenceId === null) {
+                return false;
             }
 
-            // In streaming mode, first delta arrives while processing is active.
-            // This avoids accidentally using stale non-trigger responses.
             if (messageType === 'vlm_stream') {
-                return isProcessing;
+                return activeInferenceId === pendingTriggerInferenceId;
             }
 
-            // In non-streaming mode, response is complete; inference count should increase.
-            if (messageType === 'vlm_response' && Number.isFinite(totalInferences)) {
-                const baseline = triggerBaselineInferenceCount ?? -1;
-                return totalInferences > baseline;
+            if (messageType === 'vlm_response') {
+                return completedInferenceId === pendingTriggerInferenceId;
             }
 
             return false;
@@ -3852,6 +3858,7 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
                     }
 
                     if (data.status === 'started') {
+                        bindTriggerInferenceId(data.inference_id);
                         triggerInferenceBtn.textContent = 'Triggered!';
                     } else if (data.status === 'busy') {
                         resetTriggerRoundTrip();

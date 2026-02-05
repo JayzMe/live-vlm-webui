@@ -343,8 +343,8 @@ async def websocket_handler(request):
                                 {"type": "trigger_status", "status": "no_track"}
                             )
                         else:
-                            status = current_processor_track.trigger_inference()
-                            await ws.send_json({"type": "trigger_status", "status": status})
+                            trigger_result = current_processor_track.trigger_inference()
+                            await ws.send_json({"type": "trigger_status", **trigger_result})
 
                     elif data.get("type") == "update_streaming_mode":
                         enabled = bool(data.get("enabled", False))
