@@ -3853,6 +3853,9 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
 
                     if (data.status === 'started') {
                         triggerInferenceBtn.textContent = 'Triggered!';
+                    } else if (data.status === 'busy') {
+                        resetTriggerRoundTrip();
+                        triggerInferenceBtn.textContent = 'Still processing';
                     } else if (data.status === 'no_frame') {
                         resetTriggerRoundTrip();
                         triggerInferenceBtn.textContent = 'No frame yet';

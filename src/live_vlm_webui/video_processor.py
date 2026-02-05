@@ -208,7 +208,7 @@ class VideoProcessorTrack(VideoStreamTrack):
             logger.error(f"Error processing frame: {e}", exc_info=True)
             raise
 
-    def trigger_inference(self, prompt: Optional[str] = None) -> bool:
+    def trigger_inference(self, prompt: Optional[str] = None) -> str:
         """
         Trigger a VLM inference on the most recent frame (on-demand).
 
@@ -216,8 +216,12 @@ class VideoProcessorTrack(VideoStreamTrack):
             prompt: Optional prompt override for this inference
 
         Returns:
-            True if an inference task was queued, False if no frame is available
+            Status string: "started", "no_frame", or "busy"
         """
+        if self.vlm_service.is_processing:
+            logger.info("Ignoring trigger inference request: VLM is still processing")
+            return "busy"
+
         frame_source = self.latest_frame
         img = None
 
@@ -231,7 +235,7 @@ class VideoProcessorTrack(VideoStreamTrack):
             img = self.last_frame.copy()
 
         if img is None:
-            return False
+            return "no_frame"
 
         pil_img = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
         asyncio.create_task(
@@ -240,7 +244,7 @@ class VideoProcessorTrack(VideoStreamTrack):
             )
         )
         logger.info("Triggered VLM inference on current frame")
-        return True
+        return "started"
 
     def _add_text_overlay(self, img: np.ndarray, text: str, status: str = "") -> np.ndarray:
         """

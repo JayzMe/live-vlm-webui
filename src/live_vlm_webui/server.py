@@ -343,8 +343,7 @@ async def websocket_handler(request):
                                 {"type": "trigger_status", "status": "no_track"}
                             )
                         else:
-                            triggered = current_processor_track.trigger_inference()
-                            status = "started" if triggered else "no_frame"
+                            status = current_processor_track.trigger_inference()
                             await ws.send_json({"type": "trigger_status", "status": status})
 
                     elif data.get("type") == "update_streaming_mode":
