@@ -395,6 +395,105 @@ For production use, get a proper SSL certificate from Let's Encrypt or a certifi
 
 ---
 
+## WebRTC Connection Issues
+
+### No VLM analysis results / GPU not increasing / Connection stuck
+
+**Symptoms:**
+- ✅ Server starts successfully
+- ✅ Web UI loads properly
+- ✅ Camera permission granted
+- ❌ No VLM analysis results appear
+- ❌ GPU utilization stays at 0%
+- ❌ Video preview may show but no processing happens
+
+**Root Cause:** WebRTC connection is not completing. The ICE (Interactive Connectivity Establishment) connection gets stuck in "checking" state and never reaches "connected".
+
+**How to verify this is the issue:**
+
+Check server logs for this pattern:
+```log
+ICE gathering state: complete
+Created answer with 1 transceivers
+ICE connection state: checking
+Connection state: connecting
+# ❌ Connection never progresses to "connected"
+```
+
+Check browser console (F12 → Console tab):
+```javascript
+ICE connection state: checking
+# ❌ Should show "connected" but doesn't
+```
+
+**Solution:** This issue has been fixed in recent versions. Update to the latest version:
+
+```bash
+# Update to latest version
+pip install --upgrade live-vlm-webui
+
+# Or if using git:
+cd live-vlm-webui
+git pull
+pip install -e .
+```
+
+**If updating doesn't help, check these:**
+
+1. **Firewall blocking WebRTC:**
+   ```bash
+   # Allow UDP for WebRTC
+   sudo ufw allow 8090/tcp
+   sudo ufw allow 49152:65535/udp  # WebRTC ports
+   ```
+
+2. **STUN server unreachable:**
+   ```bash
+   # Test STUN server connectivity
+   curl -I stun.l.google.com:19302
+   ```
+
+3. **Corporate/Network restrictions:**
+   - Some corporate networks block WebRTC traffic
+   - Try from a different network or use mobile hotspot for testing
+   - Check if UDP traffic is blocked by your router/firewall
+
+4. **Browser compatibility:**
+   - ✅ Chrome/Edge (recommended - best WebRTC support)
+   - ✅ Firefox (good support)
+   - ⚠️ Safari (limited support)
+   - Use latest browser version
+
+5. **SSL certificate issues:**
+   - Make sure you accepted the self-signed certificate warning
+   - Clear browser cache and reload: Ctrl+Shift+R (Cmd+Shift+R on Mac)
+
+**Technical Details:**
+
+The fix ensures ICE candidates are properly gathered before exchanging WebRTC offers. Without this, the peers can't find network paths to connect, leaving the connection in "checking" state indefinitely.
+
+**Verify the fix worked:**
+
+After starting camera, you should see in server logs:
+```log
+✅ ICE gathering state: complete
+✅ Created answer with 1 transceivers
+✅ ICE connection state: checking
+✅ ICE connection state: connected    # ← This line should appear!
+✅ Connection state: connected
+```
+
+And browser console should show:
+```javascript
+ICE connection state: connected  // ← Must see this!
+```
+
+Once connected, you should immediately see:
+- VLM analysis results appearing in the UI
+- GPU utilization increasing (check with `nvidia-smi` or `jtop`)
+
+---
+
 ## VLM Backend Issues
 
 > 📖 **Reference:** For a complete list of available Vision-Language Models across different providers, see [List of VLMs](usage/list-of-vlms.md).

@@ -23,6 +23,7 @@ import cv2
 import numpy as np
 from PIL import Image
 from aiortc import VideoStreamTrack
+from aiortc.mediastreams import MediaStreamError
 from typing import Optional
 import logging
 import time
@@ -179,6 +180,10 @@ class VideoProcessorTrack(VideoStreamTrack):
             # This avoids expensive BGR→YUV conversion
             return frame
 
+        except MediaStreamError:
+            # Track ended (user stopped, tab closed, etc.) — normal, not an error
+            logger.debug("Video track ended")
+            raise
         except Exception as e:
             logger.error(f"Error processing frame: {e}", exc_info=True)
             raise

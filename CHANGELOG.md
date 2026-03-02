@@ -7,14 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Planned for 0.4.0
+- **Multi-session support for cloud deployment**: Scope multi-user / multi-session architecture for cloud deployments (see current limitations in 0.3.0).
+
+---
+
+## [0.3.0] - 2026-03-02
+
+**UI upgrade and robotics-oriented prompts**
+
+### Added
+- **Video overlay controls (play / stop)**:
+  - Big green PLAY button centered on video; animates to top-left and fades when streaming starts
+  - Small red STOP button in top-left while streaming (higher opacity for visibility)
+  - Sidebar start/stop replaced by overlay flow for cleaner UX
+- **Fullscreen mode**: Toggle fullscreen on the video card with VLM output overlay; shrink and mirror buttons remain clickable (z-index fix)
+- **Robotics-oriented prompt preset**: "Robot Navigation (Simple)" system prompt—describe scene and output 5 navigation commands (`linear_x`, `angular_z`) with reasons, e.g. for bathroom-finding or similar tasks
+
 ### Fixed
-- **Model initialization race condition**: Fixed auto-selected models not being sent to server
-  - Previously, if the UI auto-selected a model on page load, it wouldn't be sent to the server
-  - This happened because `fetchModels()` ran before WebSocket connection completed
-  - Symptom: Camera opens but no VLM processing until manually selecting a model
-  - Fix: Send current model to server immediately after WebSocket connects
-  - Ensures server always uses the model shown in UI, even when auto-selected
-  - Result: VLM processing starts automatically without requiring manual model selection
+- **Model initialization race condition**: Auto-selected model is sent to server as soon as WebSocket connects so VLM processing starts without manually re-selecting the model
+- **MediaStreamError on stop**: Track end when user stops is handled as normal shutdown (logged at DEBUG only, no error/traceback)
+- **Fullscreen controls**: Shrink (minimize) and Mirror buttons stay above the VLM overlay and remain clickable in fullscreen
+- **Jetson Thor Docker** ([#14](https://github.com/NVIDIA-AI-IOT/live-vlm-webui/issues/14)): `start_container.sh` now uses `--runtime=nvidia` instead of `--gpus all` on Jetson (Thor and Orin) so containers start correctly
+
+### Changed
+- **WebRTC**: Wait for ICE gathering to complete before sending offer (reduces stuck "checking" connections)
+- **Troubleshooting**: New "WebRTC connection issues" section (ICE stuck, firewall, STUN, verification steps)
+- **Scripts**: `start_server.sh` suggests `kill -9` when port is in use
 
 ---
 
@@ -360,6 +379,9 @@ This is the initial public release of Live VLM WebUI - a real-time vision langua
 
 ---
 
-[Unreleased]: https://github.com/NVIDIA-AI-IOT/live-vlm-webui/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/NVIDIA-AI-IOT/live-vlm-webui/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/NVIDIA-AI-IOT/live-vlm-webui/compare/v0.2.1...v0.3.0
+[0.2.1]: https://github.com/NVIDIA-AI-IOT/live-vlm-webui/compare/v0.2.0...v0.2.1
+[0.2.0]: https://github.com/NVIDIA-AI-IOT/live-vlm-webui/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/NVIDIA-AI-IOT/live-vlm-webui/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/NVIDIA-AI-IOT/live-vlm-webui/releases/tag/v0.1.0

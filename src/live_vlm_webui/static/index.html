@@ -730,6 +730,9 @@ limitations under the License.
             flex: 1;
             overflow-y: auto;
             padding: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
         }
 
 
@@ -768,13 +771,21 @@ limitations under the License.
             overflow: hidden;
             margin-bottom: 20px;
             position: relative;
+            display: flex;
+            flex-direction: column;
         }
 
         video {
             width: 100%;
+            flex: 1;
+            min-height: 240px;
+            max-height: 100%;
             display: block;
             background: #000;
             transition: transform 0.3s ease;
+            object-fit: contain;
+            margin: 0;
+            padding: 0;
         }
 
         /* Video Overlay Text */
@@ -839,6 +850,250 @@ limitations under the License.
         .video-control-btn.active {
             background: var(--accent-color);
             border-color: var(--accent-color);
+        }
+
+        /* Big Start Button (centered on video) */
+        .big-start-btn {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: min(140px, 25vh);
+            height: min(140px, 25vh);
+            max-width: 80%;
+            max-height: 80%;
+            border-radius: 16px;
+            background: linear-gradient(135deg, #76B900, #5a8f00);
+            border: none;
+            color: white;
+            font-size: 20px;
+            font-weight: 600;
+            cursor: pointer;
+            box-shadow: 0 8px 24px rgba(118, 185, 0, 0.5);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            z-index: 100;
+            opacity: 0.8;
+            transition: transform 0.2s ease, box-shadow 0.2s ease, opacity 0.2s ease;
+        }
+
+        .big-start-btn:hover:not(:disabled):not(.animating) {
+            transform: translate(-50%, -50%) scale(1.05);
+            box-shadow: 0 12px 32px rgba(118, 185, 0, 0.6);
+            opacity: 0.95;
+        }
+
+        .big-start-btn:active:not(:disabled):not(.animating) {
+            transform: translate(-50%, -50%) scale(0.95);
+        }
+
+        .big-start-btn:disabled {
+            opacity: 0.8;
+            cursor: wait;
+            transform: translate(-50%, -50%);
+        }
+
+        .big-start-btn i, .big-start-btn svg {
+            width: 56px !important;
+            height: 56px !important;
+            flex-shrink: 0;
+        }
+
+        /* Animation to top-left corner when streaming starts */
+        .big-start-btn.animating {
+            animation: moveToCorner 0.5s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+            pointer-events: none;
+        }
+
+        @keyframes moveToCorner {
+            0% {
+                top: 50%;
+                left: 50%;
+                transform: translate(-50%, -50%);
+                width: 140px;
+                height: 140px;
+                border-radius: 16px;
+                background: linear-gradient(135deg, #76B900, #5a8f00);
+                font-size: 20px;
+                box-shadow: 0 8px 24px rgba(118, 185, 0, 0.5);
+            }
+            100% {
+                top: 16px;
+                left: 16px;
+                transform: translate(0, 0);
+                width: 48px;
+                height: 48px;
+                border-radius: 8px;
+                background: linear-gradient(135deg, #FFA726, #FF9800);
+                font-size: 0px;
+                box-shadow: 0 4px 12px rgba(255, 152, 0, 0.5);
+                opacity: 0;
+            }
+        }
+
+        /* Hide after animation */
+        .big-start-btn.streaming {
+            display: none;
+        }
+
+        /* Small Stop button (top-left corner when streaming) */
+        .small-stop-btn {
+            position: absolute;
+            top: 16px;
+            left: 16px;
+            width: 48px;
+            height: 48px;
+            border-radius: 8px;
+            background: linear-gradient(135deg, #EF5350, #D32F2F) !important;
+            border: none;
+            color: white;
+            cursor: pointer;
+            box-shadow: 0 4px 12px rgba(239, 83, 80, 0.5);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            transition: transform 0.3s ease, opacity 0.3s ease;
+            z-index: 100;
+            opacity: 0.7;
+        }
+
+        .small-stop-btn.show {
+            display: flex;
+        }
+
+        .small-stop-btn:hover {
+            background: linear-gradient(135deg, #EF5350, #D32F2F) !important;
+            transform: scale(1.1);
+            opacity: 1 !important;
+        }
+
+        .small-stop-btn:active {
+            transform: scale(0.95);
+        }
+
+        .small-stop-btn i, .small-stop-btn svg {
+            width: 30px !important;
+            height: 30px !important;
+            flex-shrink: 0;
+        }
+
+        /* Fullscreen button (top-right corner) */
+        .fullscreen-btn {
+            position: absolute;
+            top: 12px;
+            right: 12px;
+            width: 40px;
+            height: 40px;
+            border-radius: 8px;
+            background: rgba(0, 0, 0, 0.5);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            color: white;
+            cursor: pointer;
+            backdrop-filter: blur(10px);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.2s ease;
+            z-index: 99;
+            opacity: 0.3;
+        }
+
+        .fullscreen-btn:hover {
+            background: rgba(0, 0, 0, 0.8);
+            border-color: var(--accent-color);
+            opacity: 0.8;
+            transform: scale(1.05);
+        }
+
+        .fullscreen-btn svg, .fullscreen-btn i {
+            width: 20px !important;
+            height: 20px !important;
+        }
+
+        /* Fullscreen mode styles */
+        .video-card.fullscreen {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            width: 100vw !important;
+            height: 100vh !important;
+            max-width: 100vw !important;
+            max-height: 100vh !important;
+            z-index: 9999;
+            margin: 0;
+            border-radius: 0;
+            border: none;
+        }
+
+        .video-card.fullscreen video {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+        }
+
+        .video-card.fullscreen .fullscreen-btn {
+            opacity: 0.7;
+            background: rgba(0, 0, 0, 0.8);
+            z-index: 101;
+        }
+
+        .video-card.fullscreen .fullscreen-btn:hover {
+            opacity: 1;
+            transform: scale(1.1);
+        }
+
+        /* Keep controls above VLM overlay in fullscreen so shrink/mirror remain clickable */
+        .video-card.fullscreen .video-controls {
+            z-index: 101;
+        }
+
+        /* VLM Output overlay in fullscreen mode */
+        .fullscreen-vlm-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            padding: 24px;
+            background: linear-gradient(to bottom, rgba(0, 0, 0, 0.9), rgba(0, 0, 0, 0.7), transparent);
+            color: white;
+            z-index: 100;
+            display: none;
+            max-height: 40vh;
+            overflow-y: auto;
+        }
+
+        .video-card.fullscreen .fullscreen-vlm-overlay {
+            display: block;
+        }
+
+        .fullscreen-vlm-overlay .vlm-title {
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--accent-color);
+            margin-bottom: 8px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .fullscreen-vlm-overlay .vlm-content {
+            font-size: 18px;
+            line-height: 1.6;
+            font-weight: 500;
+            text-shadow: 0 2px 8px rgba(0, 0, 0, 0.8);
+        }
+
+        .fullscreen-vlm-overlay .vlm-metrics {
+            font-size: 12px;
+            color: rgba(255, 255, 255, 0.7);
+            margin-top: 8px;
+            display: flex;
+            gap: 16px;
         }
 
         /* Generation Result */
@@ -1600,6 +1855,87 @@ limitations under the License.
         }
         */
 
+        /* Responsive Layout - Side by Side on Wide Screens */
+        @media (min-width: 1400px) {
+            .main-content {
+                display: grid;
+                grid-template-columns: 1fr 1fr;
+                grid-template-rows: minmax(0, 1fr) auto;
+                gap: 20px;
+                align-items: start;
+                max-height: calc(100vh - 100px);
+            }
+
+            /* Video card in left column */
+            .video-card {
+                grid-column: 1;
+                grid-row: 1;
+                margin-bottom: 0;
+                align-self: stretch;
+                max-height: 100%;
+            }
+
+            /* VLM Output card in right column */
+            .result-card:not(#systemStatsCard) {
+                grid-column: 2;
+                grid-row: 1;
+                margin-bottom: 0;
+                max-height: 100%;
+                overflow-y: auto;
+                align-self: stretch;
+            }
+
+            /* System Stats card spans full width at bottom */
+            #systemStatsCard {
+                grid-column: 1 / -1;
+                grid-row: 2;
+                margin-bottom: 0;
+            }
+        }
+
+        @media (min-width: 1600px) {
+            .main-content {
+                grid-template-columns: 1.2fr 1fr;
+            }
+        }
+
+        /* Responsive adjustments for smaller screens */
+        @media (max-width: 1024px) {
+            .sidebar {
+                width: 280px;
+            }
+
+            .header-title {
+                font-size: 18px;
+            }
+        }
+
+        @media (max-width: 768px) {
+            .main-content {
+                padding: 12px;
+            }
+
+            .video-card {
+                border-radius: 8px;
+            }
+
+            .result-card {
+                border-radius: 8px;
+                padding: 16px;
+            }
+
+            .big-start-btn {
+                width: min(100px, 20vh);
+                height: min(100px, 20vh);
+                font-size: 16px;
+            }
+
+            .big-start-btn i, .big-start-btn svg {
+                width: min(40px, 8vh) !important;
+                height: min(40px, 8vh) !important;
+            }
+        }
+
     </style>
 
     <!-- SVG Gradient Definitions (for gradient strokes) -->
@@ -1893,14 +2229,14 @@ limitations under the License.
                 </div>
             </div>
 
-            <!-- Camera and App Control -->
+            <!-- Video Source -->
             <div class="panel">
                 <div class="panel-header" onclick="togglePanel('cameraConfig')">
                     <div class="panel-title">
                         <span class="panel-icon">
                             <i data-lucide="video"></i>
                         </span>
-                        Camera and App Control
+                        Video Source
                     </div>
                     <span class="panel-toggle" id="cameraConfigToggle">▼</span>
                 </div>
@@ -1952,14 +2288,6 @@ limitations under the License.
                         </div>
                     </div>
                     <div class="form-group">
-                        <button class="btn btn-primary" id="startBtn" style="width: 100%; margin-bottom: 8px;">
-                            <i data-lucide="play" style="width: 14px; height: 14px; margin-right: 4px;"></i>
-                            Open Camera and<br>Start VLM Analysis
-                        </button>
-                        <button class="btn btn-secondary" id="stopBtn" disabled style="width: 100%;">
-                            <i data-lucide="square" style="width: 14px; height: 14px; margin-right: 4px;"></i>
-                            Stop
-                        </button>
                         <!-- RTSP Beta Warning (shown only when RTSP tab is active) -->
                         <div id="rtspBetaWarning" class="input-hint" style="margin-top: 12px; color: var(--warning-color); display: none; align-items: center; gap: 4px;">
                             <span><strong>Beta:</strong> Tested with Reolink RLC-811A. Other cameras may work. <a href="https://github.com/NVIDIA-AI-IOT/live-vlm-webui/blob/main/docs/usage/rtsp-ip-cameras.md" target="_blank" style="color: var(--warning-color); text-decoration: underline;">Learn more</a></span>
@@ -2031,12 +2359,40 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
         <!-- Main Content -->
         <div class="main-content">
             <!-- Video Feed -->
-            <div class="video-card">
-                <div class="video-controls">
+            <div class="video-card" id="videoCard">
+                <!-- Big Start Button (centered overlay) -->
+                <button id="bigStartBtn" class="big-start-btn" onclick="start()">
+                    <i data-lucide="play"></i>
+                    Start
+                </button>
+
+                <!-- Small Stop Button (top-left corner when streaming) -->
+                <button id="smallStopBtn" class="small-stop-btn" onclick="stop()">
+                    <i data-lucide="square"></i>
+                </button>
+
+                <!-- Fullscreen Button (top-right corner) -->
+                <button class="fullscreen-btn" onclick="toggleFullscreen()" title="Toggle fullscreen">
+                    <i data-lucide="maximize" id="fullscreenIcon"></i>
+                </button>
+
+                <!-- VLM Output Overlay (shown in fullscreen mode) -->
+                <div class="fullscreen-vlm-overlay" id="fullscreenVlmOverlay">
+                    <div class="vlm-title">
+                        <i data-lucide="bot"></i>
+                        VLM Output
+                    </div>
+                    <div class="vlm-content" id="fullscreenVlmContent">Ready</div>
+                    <div class="vlm-metrics" id="fullscreenVlmMetrics"></div>
+                </div>
+
+                <!-- Legacy controls (kept for mirror functionality) -->
+                <div class="video-controls" style="top: 64px;">
                     <button class="video-control-btn" id="mirrorBtn" title="Mirror video">
                         <i data-lucide="flip-horizontal"></i> Mirror
                     </button>
                 </div>
+
                 <video id="videoElement" autoplay playsinline muted></video>
                 <div class="video-overlay" id="videoOverlay"></div>
             </div>
@@ -2312,14 +2668,10 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
                     webcamControls.style.display = 'block';
                     rtspControls.style.display = 'none';
                     rtspBetaWarning.style.display = 'none';
-                    startBtn.innerHTML = '<i data-lucide="play" style="width: 14px; height: 14px; margin-right: 4px;"></i>Open Camera and<br>Start VLM Analysis';
-                    lucide.createIcons();
                 } else if (source === 'rtsp') {
                     webcamControls.style.display = 'none';
                     rtspControls.style.display = 'block';
                     rtspBetaWarning.style.display = 'flex';
-                    startBtn.innerHTML = '<i data-lucide="play" style="width: 14px; height: 14px; margin-right: 4px;"></i>Connect to Stream and<br>Start VLM Analysis';
-                    lucide.createIcons();
                 }
             });
         });
@@ -2566,6 +2918,12 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
             } else {
                 contentDiv.textContent = text;
             }
+
+            // Auto-sync to fullscreen overlay if in fullscreen mode
+            const videoCard = document.getElementById('videoCard');
+            if (videoCard && videoCard.classList.contains('fullscreen')) {
+                syncVlmToFullscreen();
+            }
         }
 
         // Enumerate cameras on page load
@@ -2804,6 +3162,52 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
             content.classList.toggle('collapsed');
             toggle.classList.toggle('collapsed');
         }
+
+        // Fullscreen Toggle
+        function toggleFullscreen() {
+            const videoCard = document.getElementById('videoCard');
+            const fullscreenIcon = document.getElementById('fullscreenIcon');
+
+            videoCard.classList.toggle('fullscreen');
+
+            // Update icon: maximize when normal, minimize when fullscreen
+            if (videoCard.classList.contains('fullscreen')) {
+                fullscreenIcon.setAttribute('data-lucide', 'minimize');
+                // Sync current VLM output to fullscreen overlay
+                syncVlmToFullscreen();
+            } else {
+                fullscreenIcon.setAttribute('data-lucide', 'maximize');
+            }
+            lucide.createIcons();
+        }
+
+        // Sync VLM output to fullscreen overlay
+        function syncVlmToFullscreen() {
+            const mainVlmContent = document.getElementById('resultTextContent');
+            const fullscreenVlmContent = document.getElementById('fullscreenVlmContent');
+            const fullscreenVlmMetrics = document.getElementById('fullscreenVlmMetrics');
+
+            if (mainVlmContent && fullscreenVlmContent) {
+                fullscreenVlmContent.innerHTML = mainVlmContent.innerHTML || 'Ready';
+            }
+
+            // Add metrics if available
+            const latency = document.getElementById('latencyValue')?.textContent;
+            const count = document.getElementById('countValue')?.textContent;
+            if (latency && count) {
+                fullscreenVlmMetrics.innerHTML = `<span>Latency: ${latency}ms</span><span>Count: ${count}</span>`;
+            }
+        }
+
+        // ESC key to exit fullscreen
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                const videoCard = document.getElementById('videoCard');
+                if (videoCard.classList.contains('fullscreen')) {
+                    toggleFullscreen();
+                }
+            }
+        });
 
         // API Key Field Toggle
         function toggleApiKeyField() {
@@ -3650,6 +4054,17 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
 
         // Start - dispatch to webcam or RTSP based on active tab
         async function start() {
+            // Animate big button
+            const bigBtn = document.getElementById('bigStartBtn');
+            bigBtn.classList.add('animating');
+            setTimeout(() => {
+                bigBtn.classList.remove('animating');
+                bigBtn.classList.add('streaming');
+            }, 500);
+
+            // Show small stop button
+            document.getElementById('smallStopBtn').classList.add('show');
+
             const activeTab = document.querySelector('.input-source-tab.active');
             const inputSource = activeTab ? activeTab.getAttribute('data-source') : 'webcam';
 
@@ -3738,8 +4153,6 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
                 const answer = await response.json();
                 await peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
 
-                startBtn.disabled = true;
-                stopBtn.disabled = false;
                 isAnalysisRunning = true;
                 updateStatus('Streaming', 'connected');
 
@@ -3804,6 +4217,31 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
                 const offer = await peerConnection.createOffer();
                 await peerConnection.setLocalDescription(offer);
 
+                // Wait for ICE gathering to complete before sending offer (with timeout)
+                // This ensures all ICE candidates are embedded in the SDP
+                console.log('Waiting for ICE gathering to complete...');
+                await new Promise((resolve) => {
+                    if (peerConnection.iceGatheringState === 'complete') {
+                        resolve();
+                    } else {
+                        const checkState = () => {
+                            if (peerConnection.iceGatheringState === 'complete') {
+                                peerConnection.removeEventListener('icegatheringstatechange', checkState);
+                                resolve();
+                            }
+                        };
+                        peerConnection.addEventListener('icegatheringstatechange', checkState);
+
+                        // Timeout after 5 seconds - proceed anyway to avoid hanging
+                        setTimeout(() => {
+                            peerConnection.removeEventListener('icegatheringstatechange', checkState);
+                            console.warn('ICE gathering timeout - proceeding anyway');
+                            resolve();
+                        }, 5000);
+                    }
+                });
+                console.log('ICE gathering state:', peerConnection.iceGatheringState, '- sending offer');
+
                 // Send offer with RTSP URL to server
                 const response = await fetch('/offer', {
                     method: 'POST',
@@ -3823,8 +4261,6 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
                 const answer = await response.json();
                 await peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
 
-                startBtn.disabled = true;
-                stopBtn.disabled = false;
                 isAnalysisRunning = true;
 
                 // Disable RTSP URL field and Test button while streaming
@@ -3844,6 +4280,12 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
 
         // Stop (handles both webcam and RTSP)
         async function stop() {
+            // Reset overlay buttons
+            const bigBtn = document.getElementById('bigStartBtn');
+            const smallStopBtn = document.getElementById('smallStopBtn');
+            bigBtn.classList.remove('animating', 'streaming');
+            smallStopBtn.classList.remove('show');
+
             if (fadeTimeout) {
                 clearTimeout(fadeTimeout);
                 fadeTimeout = null;
@@ -3863,8 +4305,6 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
 
             videoElement.srcObject = null;
 
-            startBtn.disabled = false;
-            stopBtn.disabled = true;
             isAnalysisRunning = false;
             updateStatus('Connected', 'connected');
 
@@ -3891,8 +4331,9 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
             lastText = '';
         }
 
-        startBtn.addEventListener('click', start);
-        stopBtn.addEventListener('click', stop);
+        // Sidebar start/stop buttons removed - using overlay buttons instead
+        // startBtn.addEventListener('click', start);
+        // stopBtn.addEventListener('click', stop);
 
         // Load on page load
         window.addEventListener('load', async () => {

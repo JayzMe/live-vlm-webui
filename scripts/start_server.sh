@@ -184,14 +184,14 @@ if [ "$PORT_IN_USE" = true ]; then
             if [ -n "$PID" ]; then
                 PROC_INFO=$(ps -p $PID -o comm= 2>/dev/null || echo "unknown")
                 echo "  Process using port 8090: PID $PID ($PROC_INFO)"
-                echo "  kill $PID"
+                echo "  kill -9 $PID"
             else
                 echo "  lsof -ti :8090  # Find the process"
-                echo "  kill <PID>      # Stop it"
+                echo "  kill -9 <PID>   # Force stop it"
             fi
         else
             echo "  netstat -tulpn | grep :8090  # Find the process"
-            echo "  kill <PID>                    # Stop it"
+            echo "  kill -9 <PID>                 # Force stop it"
         fi
         echo ""
         echo "Option 3: Use a different port"
