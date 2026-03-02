@@ -30,7 +30,6 @@ import re
 import urllib.request
 from pathlib import Path
 
-
 # Test video file (HD 720p, publicly hosted, Creative Commons from Big Buck Bunny)
 # Using Google Cloud Storage which is fast and reliable
 TEST_VIDEO_URL = "http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4"
