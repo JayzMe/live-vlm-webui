@@ -2142,6 +2142,32 @@ limitations under the License.
                             <input type="number" id="gpuUpdateInterval" value="0.25" min="0.1" max="5.0" step="0.05" style="width: 80px; padding: 6px 8px; border: 1px solid var(--border-color); border-radius: 4px; background: var(--bg-primary); color: var(--text-primary); font-size: 14px;">
                         </div>
                     </div>
+
+                    <div class="settings-section">
+                        <div class="settings-section-title">Debug</div>
+
+                        <div class="settings-item">
+                            <div>
+                                <div class="settings-item-label">Show request payload</div>
+                                <div class="settings-item-description">Include request JSON (image + prompt) under the prompt area; collapsed by default</div>
+                            </div>
+                            <label class="toggle-switch">
+                                <input type="checkbox" id="debugShowRequestPayload">
+                                <span class="toggle-slider"></span>
+                            </label>
+                        </div>
+
+                        <div class="settings-item">
+                            <div>
+                                <div class="settings-item-label">Show response payload</div>
+                                <div class="settings-item-description">Include API response JSON under the VLM output; collapsed by default</div>
+                            </div>
+                            <label class="toggle-switch">
+                                <input type="checkbox" id="debugShowResponsePayload">
+                                <span class="toggle-slider"></span>
+                            </label>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -2429,6 +2455,12 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
             </div>
 
                 <div class="result-prompt" id="currentPrompt"></div>
+                <div id="requestPayloadDebug" class="debug-payload-block" style="display: none; margin-top: 8px;">
+                    <details style="margin: 0;">
+                        <summary style="cursor: pointer; font-size: 12px; color: var(--text-secondary);">Request payload (debug)</summary>
+                        <pre id="requestPayloadContent" style="margin: 8px 0 0; padding: 10px; background: var(--bg-secondary); border-radius: 8px; font-size: 11px; overflow: auto; max-height: 240px; white-space: pre-wrap; word-break: break-all;"></pre>
+                    </details>
+                </div>
                 <div class="result-text" id="resultText">
                     <button class="markdown-toggle-embedded" id="markdownToggle" title="Toggle Markdown Rendering">
                         <span id="markdownIcon"><i data-lucide="code"></i></span>
@@ -2438,6 +2470,12 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
                         <i data-lucide="copy"></i>
                     </button>
                     <div class="result-text-content" id="resultTextContent"></div>
+                </div>
+                <div id="responsePayloadDebug" class="debug-payload-block" style="display: none; margin-top: 8px;">
+                    <details style="margin: 0;">
+                        <summary style="cursor: pointer; font-size: 12px; color: var(--text-secondary);">Response payload (debug)</summary>
+                        <pre id="responsePayloadContent" style="margin: 8px 0 0; padding: 10px; background: var(--bg-secondary); border-radius: 8px; font-size: 11px; overflow: auto; max-height: 240px; white-space: pre-wrap; word-break: break-all;"></pre>
+                    </details>
                 </div>
             </div>
 
@@ -2539,6 +2577,8 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
         let websocket = null;
         let fadeTimeout = null;
         let lastText = '';
+        // Multi-session: one ID per page/tab; sent in WebSocket and /offer so this tab gets only its VLM output
+        const sessionId = crypto.randomUUID ? crypto.randomUUID() : 'tab-' + Date.now() + '-' + Math.random().toString(36).slice(2);
         let isAnalysisRunning = false;
         let selectedCameraId = null;
         let rtspSessionId = 'default';  // For RTSP mode
@@ -3632,6 +3672,36 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
             }
         });
 
+        // Debug payload toggles (Settings modal): send set_debug so server includes request/response payload in vlm_response
+        function sendDebugFlags() {
+            if (!websocket || websocket.readyState !== WebSocket.OPEN) return;
+            const req = document.getElementById('debugShowRequestPayload');
+            const res = document.getElementById('debugShowResponsePayload');
+            if (req && res) {
+                websocket.send(JSON.stringify({
+                    type: 'set_debug',
+                    show_request_payload: req.checked,
+                    show_response_payload: res.checked
+                }));
+            }
+        }
+        const debugShowRequestPayload = document.getElementById('debugShowRequestPayload');
+        const debugShowResponsePayload = document.getElementById('debugShowResponsePayload');
+        const requestPayloadDebugEl = document.getElementById('requestPayloadDebug');
+        const responsePayloadDebugEl = document.getElementById('responsePayloadDebug');
+        if (debugShowRequestPayload) {
+            debugShowRequestPayload.addEventListener('change', () => {
+                sendDebugFlags();
+                if (requestPayloadDebugEl) requestPayloadDebugEl.style.display = debugShowRequestPayload.checked ? 'block' : 'none';
+            });
+        }
+        if (debugShowResponsePayload) {
+            debugShowResponsePayload.addEventListener('change', () => {
+                sendDebugFlags();
+                if (responsePayloadDebugEl) responsePayloadDebugEl.style.display = debugShowResponsePayload.checked ? 'block' : 'none';
+            });
+        }
+
         // Sparkline Drawing
         function drawSparkline(canvas, data, color) {
             const ctx = canvas.getContext('2d');
@@ -3922,7 +3992,7 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
             }
 
             const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-            const wsUrl = `${protocol}//${window.location.host}/ws`;
+            const wsUrl = `${protocol}//${window.location.host}/ws?session_id=${encodeURIComponent(sessionId)}`;
 
             websocket = new WebSocket(wsUrl);
 
@@ -3992,6 +4062,22 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
                         avgLatencyValue.textContent = Math.round(data.metrics.avg_latency_ms);
                         countValue.textContent = data.metrics.total_inferences;
                     }
+                    if (data.request_payload) {
+                        const block = document.getElementById('requestPayloadDebug');
+                        const pre = document.getElementById('requestPayloadContent');
+                        if (block && pre && document.getElementById('debugShowRequestPayload')?.checked) {
+                            block.style.display = 'block';
+                            pre.textContent = JSON.stringify(data.request_payload, null, 2);
+                        }
+                    }
+                    if (data.response_payload) {
+                        const block = document.getElementById('responsePayloadDebug');
+                        const pre = document.getElementById('responsePayloadContent');
+                        if (block && pre && document.getElementById('debugShowResponsePayload')?.checked) {
+                            block.style.display = 'block';
+                            pre.textContent = JSON.stringify(data.response_payload, null, 2);
+                        }
+                    }
                 } else if (data.type === 'gpu_stats') {
                     window.lastSystemStats = data.stats;  // Store for theme changes
 
@@ -4025,6 +4111,18 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
                         checkApiKeyRequirement(data.api_base);
                         updateSystemStatsVisibility(data.api_base);
                     }
+                    if (data.process_every != null && !isNaN(data.process_every)) {
+                        processEvery.value = String(data.process_every);
+                    }
+                    const reqCb = document.getElementById('debugShowRequestPayload');
+                    const resCb = document.getElementById('debugShowResponsePayload');
+                    if ((reqCb?.checked || resCb?.checked) && websocket && websocket.readyState === WebSocket.OPEN) {
+                        websocket.send(JSON.stringify({
+                            type: 'set_debug',
+                            show_request_payload: !!reqCb?.checked,
+                            show_response_payload: !!resCb?.checked
+                        }));
+                    }
                 } else if (data.type === 'model_updated') {
                     // Model was updated on server
                     if (data.model) {
@@ -4035,7 +4133,7 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
                     // Prompt was updated on server (already handled in applyPrompt)
                     console.log('Prompt updated:', data.prompt);
                 } else if (data.type === 'processing_updated') {
-                    // Processing interval was updated on server
+                    if (data.process_every != null) processEvery.value = String(data.process_every);
                     console.log('Processing interval updated:', data.process_every);
                 }
             };
@@ -4147,6 +4245,7 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
                     body: JSON.stringify({
                         sdp: peerConnection.localDescription.sdp,
                         type: peerConnection.localDescription.type,
+                        session_id: sessionId,
                     }),
                 });
 
@@ -4242,14 +4341,15 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
                 });
                 console.log('ICE gathering state:', peerConnection.iceGatheringState, '- sending offer');
 
-                // Send offer with RTSP URL to server
+                // Send offer with RTSP URL and session to server
                 const response = await fetch('/offer', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         sdp: peerConnection.localDescription.sdp,
                         type: peerConnection.localDescription.type,
-                        rtsp_url: rtspUrl
+                        rtsp_url: rtspUrl,
+                        session_id: sessionId,
                     })
                 });
 

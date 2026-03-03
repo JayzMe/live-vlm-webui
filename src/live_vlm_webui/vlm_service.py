@@ -61,6 +61,8 @@ class VLMService:
         self.current_response = "Initializing..."
         self.is_processing = False
         self._processing_lock = asyncio.Lock()
+        self._last_request_payload = None  # For debug: request body (image truncated)
+        self._last_response_payload = None  # For debug: API response body
 
         # Metrics tracking
         self.last_inference_time = 0.0  # seconds
@@ -91,23 +93,66 @@ class VLMService:
             img_base64 = base64.b64encode(img_byte_arr).decode("utf-8")
 
             # Create message with image
+            image_url = f"data:image/jpeg;base64,{img_base64}"
             messages = [
                 {
                     "role": "user",
                     "content": [
                         {"type": "text", "text": prompt},
-                        {
-                            "type": "image_url",
-                            "image_url": {"url": f"data:image/jpeg;base64,{img_base64}"},
-                        },
+                        {"type": "image_url", "image_url": {"url": image_url}},
                     ],
                 }
             ]
+
+            # Store request payload for debug (truncate base64 for display)
+            truncate_len = 120
+            if len(img_base64) > truncate_len:
+                image_url_debug = f"data:image/jpeg;base64,{img_base64[:truncate_len]}...<{len(img_base64)} chars total>"
+            else:
+                image_url_debug = image_url
+            messages_debug = [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {"type": "image_url", "image_url": {"url": image_url_debug}},
+                    ],
+                }
+            ]
+            self._last_request_payload = {
+                "model": self.model,
+                "messages": messages_debug,
+                "max_tokens": self.max_tokens,
+                "temperature": 0.7,
+            }
 
             # Call API
             response = await self.client.chat.completions.create(
                 model=self.model, messages=messages, max_tokens=self.max_tokens, temperature=0.7
             )
+
+            # Store response payload for debug (serialize to dict)
+            try:
+                self._last_response_payload = (
+                    response.model_dump() if hasattr(response, "model_dump") else response.dict()
+                )
+            except Exception:
+                self._last_response_payload = {
+                    "id": getattr(response, "id", None),
+                    "model": getattr(response, "model", None),
+                    "choices": [
+                        {
+                            "index": getattr(c, "index", i),
+                            "message": {
+                                "role": getattr(getattr(c, "message", None), "role", None),
+                                "content": getattr(getattr(c, "message", None), "content", None),
+                            },
+                            "finish_reason": getattr(c, "finish_reason", None),
+                        }
+                        for i, c in enumerate(getattr(response, "choices", []))
+                    ],
+                    "usage": getattr(response, "usage", None),
+                }
 
             # Calculate latency
             end_time = time.perf_counter()
@@ -125,6 +170,20 @@ class VLMService:
         except Exception as e:
             logger.error(f"Error analyzing image: {e}")
             return f"Error: {str(e)}"
+
+    def get_last_request_payload(self) -> Optional[dict]:
+        """
+        Return the last request payload sent to the API (for debug).
+        Image data is truncated to avoid huge JSON. Returns None if no request has been made yet.
+        """
+        return self._last_request_payload
+
+    def get_last_response_payload(self) -> Optional[dict]:
+        """
+        Return the last API response payload (for debug).
+        Returns None if no response has been received yet.
+        """
+        return self._last_response_payload
 
     async def process_frame(self, image: Image.Image, prompt: Optional[str] = None) -> None:
         """

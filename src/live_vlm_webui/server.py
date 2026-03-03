@@ -25,6 +25,10 @@ import os
 import signal
 import socket
 import subprocess
+import sys
+import uuid
+from collections import defaultdict
+
 import aiohttp
 from aiohttp import web
 from aiortc import (
@@ -49,11 +53,68 @@ logger = logging.getLogger(__name__)
 # Global objects
 relay = MediaRelay()
 pcs = set()
-vlm_service = None
-websockets = set()  # Track active WebSocket connections
+vlm_service = None  # Kept for backwards compat; default session uses sessions["default"]
+websockets = set()  # Track active WebSocket connections (all)
 gpu_monitor = None  # GPU monitoring instance
 gpu_monitor_task = None  # Background task for GPU monitoring
 rtsp_tracks = {}  # Track active RTSP streams {session_id: (rtsp_track, processor_track)}
+
+# Multi-session state (0.4.0)
+default_vlm_config = {}  # Set at startup; used to create new sessions
+sessions = {}  # session_id -> {"vlm_service": VLMService}
+session_websockets = defaultdict(set)  # session_id -> set of ws
+ws_to_session = {}  # ws -> session_id
+
+
+def get_or_create_session(session_id: str):
+    """Get or create per-session state (VLM service). Thread-safe for aiohttp."""
+    if session_id not in sessions:
+        cfg = default_vlm_config
+        sessions[session_id] = {
+            "vlm_service": VLMService(
+                model=cfg.get("model", "meta/llama-3.2-11b-vision-instruct"),
+                api_base=cfg.get("api_base", "http://localhost:8000/v1"),
+                api_key=cfg.get("api_key", "EMPTY"),
+                prompt=cfg.get("prompt", "Describe what you see in this image in one sentence."),
+            ),
+            "show_request_payload": False,
+            "show_response_payload": False,
+        }
+        logger.info(f"Created new session: {session_id}")
+    return sessions[session_id]
+
+
+def send_to_session(session_id: str, message: str):
+    """Send a message only to WebSocket clients in this session."""
+    for ws in session_websockets.get(session_id, set()):
+        try:
+            asyncio.create_task(ws.send_str(message))
+        except Exception as e:
+            logger.error(f"Error sending to session {session_id}: {e}")
+
+
+def get_session_callback(session_id: str):
+    """Return a text_callback that sends VLM results only to this session."""
+
+    def callback(text: str, metrics: dict):
+        out = {"type": "vlm_response", "text": text, "metrics": metrics}
+        session = sessions.get(session_id)
+        if session and session.get("vlm_service"):
+            svc = session["vlm_service"]
+            if session.get("show_request_payload"):
+                payload = svc.get_last_request_payload()
+                if payload is not None:
+                    out["request_payload"] = payload
+            if session.get("show_response_payload"):
+                payload = svc.get_last_response_payload()
+                if payload is not None:
+                    try:
+                        out["response_payload"] = json.loads(json.dumps(payload, default=str))
+                    except (TypeError, ValueError):
+                        out["response_payload"] = payload
+        send_to_session(session_id, json.dumps(out))
+
+    return callback
 
 
 def is_port_available(port, host="0.0.0.0"):
@@ -175,31 +236,28 @@ async def models(request):
             return web.Response(
                 content_type="application/json", text=json.dumps({"models": models_list})
             )
-        elif vlm_service:
-            # Use the server's VLM service
-            models_response = await vlm_service.client.models.list()
+        else:
+            # Use default session's VLM service (backwards compat when no api_base in query)
+            default_svc = get_or_create_session("default")["vlm_service"]
+            models_response = await default_svc.client.models.list()
             models_list = [
-                {"id": model.id, "name": model.id, "current": model.id == vlm_service.model}
+                {"id": model.id, "name": model.id, "current": model.id == default_svc.model}
                 for model in models_response.data
             ]
             return web.Response(
                 content_type="application/json", text=json.dumps({"models": models_list})
             )
-        else:
-            return web.Response(
-                content_type="application/json",
-                text=json.dumps({"models": [], "error": "VLM service not initialized"}),
-            )
     except Exception as e:
         logger.error(f"Error fetching models: {e}")
         # Return current model as fallback
-        if vlm_service:
+        if sessions.get("default"):
+            default_svc = sessions["default"]["vlm_service"]
             return web.Response(
                 content_type="application/json",
                 text=json.dumps(
                     {
                         "models": [
-                            {"id": vlm_service.model, "name": vlm_service.model, "current": True}
+                            {"id": default_svc.model, "name": default_svc.model, "current": True}
                         ]
                     }
                 ),
@@ -256,42 +314,57 @@ async def detect_services(request):
 
 
 async def websocket_handler(request):
-    """Handle WebSocket connections for text updates"""
+    """Handle WebSocket connections for text updates. Supports ?session_id= for multi-session."""
     ws = web.WebSocketResponse()
     await ws.prepare(request)
 
+    # Session ID from query or generate new (client should send same id in /offer)
+    session_id = request.query.get("session_id", "").strip() or str(uuid.uuid4())
+    ws_to_session[ws] = session_id
+    session_websockets[session_id].add(ws)
     websockets.add(ws)
-    logger.info(f"WebSocket client connected. Total clients: {len(websockets)}")
+    logger.info(f"WebSocket client connected. session_id={session_id}, total clients: {len(websockets)}")
+
+    session = get_or_create_session(session_id)
+    svc = session["vlm_service"]
 
     try:
-        # Send initial message with current server configuration
-        await ws.send_json({"type": "status", "text": "Connected to server", "status": "Ready"})
+        # Send initial message with current server configuration (include session_id if we generated it)
+        await ws.send_json({
+            "type": "status",
+            "text": "Connected to server",
+            "status": "Ready",
+            "session_id": session_id,
+        })
 
-        # Send current server configuration
-        if vlm_service:
-            await ws.send_json(
-                {
-                    "type": "server_config",
-                    "model": vlm_service.model,
-                    "api_base": vlm_service.api_base,
-                    "prompt": vlm_service.prompt,
-                }
-            )
+        # Send current server configuration for this session
+        from .video_processor import VideoProcessorTrack as _VPT
+        await ws.send_json(
+            {
+                "type": "server_config",
+                "model": svc.model,
+                "api_base": svc.api_base,
+                "prompt": svc.prompt,
+                "process_every": _VPT.process_every_n_frames,
+                "session_id": session_id,
+            }
+        )
 
         # Keep connection alive and handle incoming messages
         async for msg in ws:
             if msg.type == web.WSMsgType.TEXT:
                 try:
                     data = json.loads(msg.data)
+                    # Re-resolve session in case it was recreated
+                    svc = get_or_create_session(session_id)["vlm_service"]
 
                     if data.get("type") == "update_prompt":
                         new_prompt = data.get("prompt", "").strip()
                         max_tokens = data.get("max_tokens")
-                        if new_prompt and vlm_service:
-                            vlm_service.update_prompt(new_prompt, max_tokens)
-                            logger.info(f"Prompt updated: {new_prompt}, max_tokens: {max_tokens}")
+                        if new_prompt and svc:
+                            svc.update_prompt(new_prompt, max_tokens)
+                            logger.info(f"[{session_id}] Prompt updated: {new_prompt}, max_tokens: {max_tokens}")
 
-                            # Confirm to client
                             await ws.send_json(
                                 {
                                     "type": "prompt_updated",
@@ -305,26 +378,21 @@ async def websocket_handler(request):
                         api_base = data.get("api_base", "").strip()
                         api_key = data.get("api_key", "").strip()
 
-                        if new_model and vlm_service:
-                            # Update model
-                            vlm_service.model = new_model
-
-                            # Update API settings if provided
-                            # User may have switched to different service (Ollama ↔ vLLM)
+                        if new_model and svc:
+                            svc.model = new_model
                             if api_base:
-                                vlm_service.update_api_settings(
+                                svc.update_api_settings(
                                     api_base, api_key if api_key else None
                                 )
-                                logger.info(f"Model updated: {new_model}, API: {api_base}")
+                                logger.info(f"[{session_id}] Model updated: {new_model}, API: {api_base}")
                             else:
-                                logger.info(f"Model updated: {new_model}")
+                                logger.info(f"[{session_id}] Model updated: {new_model}")
 
-                            # Confirm to client
                             await ws.send_json(
                                 {
                                     "type": "model_updated",
                                     "model": new_model,
-                                    "api_base": vlm_service.api_base,
+                                    "api_base": svc.api_base,
                                 }
                             )
 
@@ -332,16 +400,15 @@ async def websocket_handler(request):
                         process_every = data.get("process_every", 30)
                         try:
                             process_every = int(process_every)
-                            if 1 <= process_every <= 3600:  # Up to 3600 frames (2 minutes @ 30fps)
+                            if 1 <= process_every <= 3600:
                                 from .video_processor import VideoProcessorTrack
 
                                 old_value = VideoProcessorTrack.process_every_n_frames
                                 VideoProcessorTrack.process_every_n_frames = process_every
                                 logger.info(
-                                    f"Processing interval updated: {old_value} → {process_every} frames"
+                                    f"[{session_id}] Processing interval updated: {old_value} → {process_every} frames"
                                 )
 
-                                # Confirm to client
                                 await ws.send_json(
                                     {"type": "processing_updated", "process_every": process_every}
                                 )
@@ -351,6 +418,16 @@ async def websocket_handler(request):
                                 )
                         except ValueError:
                             logger.error(f"Invalid processing interval: {process_every}")
+
+                    elif data.get("type") == "set_debug":
+                        session_data = get_or_create_session(session_id)
+                        if "show_request_payload" in data:
+                            session_data["show_request_payload"] = bool(data["show_request_payload"])
+                        if "show_response_payload" in data:
+                            session_data["show_response_payload"] = bool(data["show_response_payload"])
+                        logger.debug(
+                            f"[{session_id}] Debug: request_payload={session_data.get('show_request_payload')}, response_payload={session_data.get('show_response_payload')}"
+                        )
 
                     elif data.get("type") == "update_max_latency":
                         max_latency = data.get("max_latency", 0.0)
@@ -363,9 +440,8 @@ async def websocket_handler(request):
                                 VideoProcessorTrack.max_frame_latency = max_latency
                                 status = "disabled" if max_latency == 0 else f"{max_latency:.1f}s"
                                 old_status = "disabled" if old_value == 0 else f"{old_value:.1f}s"
-                                logger.info(f"Max frame latency updated: {old_status} → {status}")
+                                logger.info(f"[{session_id}] Max frame latency updated: {old_status} → {status}")
 
-                                # Confirm to client
                                 await ws.send_json(
                                     {"type": "max_latency_updated", "max_latency": max_latency}
                                 )
@@ -380,8 +456,10 @@ async def websocket_handler(request):
             elif msg.type == web.WSMsgType.ERROR:
                 logger.error(f"WebSocket error: {ws.exception()}")
     finally:
+        session_websockets[session_id].discard(ws)
+        ws_to_session.pop(ws, None)
         websockets.discard(ws)
-        logger.info(f"WebSocket client disconnected. Total clients: {len(websockets)}")
+        logger.info(f"WebSocket client disconnected. session_id={session_id}, total clients: {len(websockets)}")
 
     return ws
 
@@ -460,10 +538,15 @@ async def gpu_monitor_loop():
 
 
 async def offer(request):
-    """Handle WebRTC offer from client (supports both webcam and RTSP)"""
+    """Handle WebRTC offer from client (supports both webcam and RTSP). Uses session_id for per-session VLM."""
     params = await request.json()
     offer_sdp = RTCSessionDescription(sdp=params["sdp"], type=params["type"])
     rtsp_url = params.get("rtsp_url")  # Optional RTSP URL for IP camera mode
+    session_id = params.get("session_id", "default")
+
+    session = get_or_create_session(session_id)
+    session_vlm = session["vlm_service"]
+    session_callback = get_session_callback(session_id)
 
     # Create RTCPeerConnection with STUN servers for Docker/NAT compatibility
     config = RTCConfiguration(
@@ -501,7 +584,7 @@ async def offer(request):
 
     # If RTSP URL provided, create RTSP track instead of waiting for browser track
     if rtsp_url:
-        logger.info(f"Creating RTSP track for: {rtsp_url}")
+        logger.info(f"[{session_id}] Creating RTSP track for: {rtsp_url}")
         try:
             rtsp_track = RTSPVideoTrack(rtsp_url)
             rtsp_cleanup_track = rtsp_track  # Store for cleanup
@@ -513,7 +596,7 @@ async def offer(request):
             relayed_rtsp = relay.subscribe(rtsp_track)
 
             processor_track = VideoProcessorTrack(
-                relayed_rtsp, vlm_service, text_callback=broadcast_text_update
+                relayed_rtsp, session_vlm, text_callback=session_callback
             )
 
             # Add processor directly to peer connection
@@ -534,9 +617,9 @@ async def offer(request):
             logger.info(f"Received track: {track.kind}")
 
             if track.kind == "video":
-                # Create processor track with VLM service and text callback
+                # Create processor track with this session's VLM and session-scoped callback
                 processor_track = VideoProcessorTrack(
-                    relay.subscribe(track), vlm_service, text_callback=broadcast_text_update
+                    relay.subscribe(track), session_vlm, text_callback=session_callback
                 )
 
                 # Add processed track back to connection
@@ -602,9 +685,12 @@ async def rtsp_start(request):
                 text=json.dumps({"error": f"Failed to connect to RTSP stream: {str(e)}"}),
             )
 
-        # Create processor track (same as WebRTC path)
+        # Create processor track with this session's VLM and session-scoped callback
+        session = get_or_create_session(session_id)
+        session_vlm = session["vlm_service"]
+        session_callback = get_session_callback(session_id)
         processor_track = VideoProcessorTrack(
-            rtsp_track, vlm_service, text_callback=broadcast_text_update
+            rtsp_track, session_vlm, text_callback=session_callback
         )
 
         # Start background task to consume frames
@@ -780,10 +866,12 @@ async def on_shutdown(app):
         gpu_monitor.cleanup()
         logger.info("GPU monitor cleaned up")
 
-    # Close all websockets
+    # Close all websockets and clear session state
     for ws in list(websockets):
         await ws.close()
     websockets.clear()
+    session_websockets.clear()
+    ws_to_session.clear()
 
     # Close all RTSP streams
     for session_id in list(rtsp_tracks.keys()):
@@ -984,6 +1072,18 @@ def main():
 
     args = parser.parse_args()
 
+    # Cloud deployment: env overrides for default API base and frame interval
+    if os.environ.get("LIVE_VLM_API_BASE"):
+        if not args.api_base:
+            args.api_base = os.environ.get("LIVE_VLM_API_BASE").strip()
+            logger.info(f"Using API base from env: {args.api_base}")
+    if os.environ.get("LIVE_VLM_PROCESS_EVERY"):
+        try:
+            args.process_every = int(os.environ.get("LIVE_VLM_PROCESS_EVERY"))
+            logger.info(f"Using process_every from env: {args.process_every}")
+        except ValueError:
+            pass
+
     # Set default SSL cert paths to config directory if not specified
     if args.ssl_cert is None:
         config_dir = get_app_config_dir()
@@ -1020,9 +1120,20 @@ def main():
                 logger.warning("   Set with: --api-key YOUR_API_KEY")
                 logger.warning("   Or use WebUI to configure API settings after starting")
 
-    # Initialize VLM service
-    global vlm_service
+    # Initialize VLM service and default session for multi-session support
+    global vlm_service, default_vlm_config
     vlm_service = VLMService(model=model, api_base=api_base, api_key=api_key, prompt=args.prompt)
+    default_vlm_config = {
+        "model": model,
+        "api_base": api_base,
+        "api_key": api_key,
+        "prompt": args.prompt,
+    }
+    sessions["default"] = {
+        "vlm_service": vlm_service,
+        "show_request_payload": False,
+        "show_response_payload": False,
+    }
 
     # Log initialization with better formatting
     service_name = "Local" if "localhost" in api_base or "127.0.0.1" in api_base else "Cloud"
@@ -1043,9 +1154,6 @@ def main():
     protocol = "http"
     if not args.no_ssl:
         # Try to auto-generate if certificates don't exist
-        import os
-        import sys
-
         if not os.path.exists(args.ssl_cert) or not os.path.exists(args.ssl_key):
             success = generate_self_signed_cert(args.ssl_cert, args.ssl_key)
             if not success:

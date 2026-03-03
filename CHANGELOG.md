@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Planned for 0.4.0
 - **Multi-session support for cloud deployment**: Scope multi-user / multi-session architecture for cloud deployments (see current limitations in 0.3.0).
+- **Cloud deployment config overrides**: Environment variables `LIVE_VLM_API_BASE` and `LIVE_VLM_PROCESS_EVERY` override default API base URL and frame processing interval (e.g. set `LIVE_VLM_PROCESS_EVERY=150` for ~5 s interval to reduce API quota usage, and `LIVE_VLM_API_BASE=https://integrate.api.nvidia.com/v1` for default NVIDIA API).
+- **Debug: request payload**: Optional "Show request payload (debug)" checkbox in Video Source panel; when enabled, each VLM response includes the request JSON (model, messages with truncated base64 image, max_tokens, temperature) for debugging how the image and prompt are sent to the API.
 
 ---
 
