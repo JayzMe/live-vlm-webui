@@ -139,10 +139,12 @@ docker run -d \
   -p 8090:8090 \
   -e LIVE_VLM_API_BASE=https://integrate.api.nvidia.com/v1 \
   -e LIVE_VLM_PROCESS_EVERY=150 \
+  -e LIVE_VLM_DEFAULT_MODEL=google/gemma-3-4b-it \
   ghcr.io/nvidia-ai-iot/live-vlm-webui:latest
 ```
 
 - **`LIVE_VLM_API_BASE`** – Default API base URL when not overridden by CLI (e.g. NVIDIA Integrate).
+- **`LIVE_VLM_DEFAULT_MODEL`** – Default model name when not overridden by CLI (e.g. `google/gemma-3-4b-it` for NVIDIA API Catalog).
 - **`LIVE_VLM_PROCESS_EVERY`** – Process every Nth frame (e.g. `150` ≈ 5 seconds at 30 fps to reduce API usage).
 
 Using an env file:
@@ -151,6 +153,7 @@ Using an env file:
 # .env.cloud
 LIVE_VLM_API_BASE=https://integrate.api.nvidia.com/v1
 LIVE_VLM_PROCESS_EVERY=150
+LIVE_VLM_DEFAULT_MODEL=google/gemma-3-4b-it
 ```
 
 ```bash

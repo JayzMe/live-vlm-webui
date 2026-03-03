@@ -76,8 +76,18 @@ if [ -z "$VIRTUAL_ENV" ] && [ -z "$CONDA_DEFAULT_ENV" ]; then
     fi
 fi
 
+# Use venv/conda python explicitly so we don't pick up system python
+PYTHON="python"
+if [ -n "$VIRTUAL_ENV" ] && [ -x "$VIRTUAL_ENV/bin/python" ]; then
+    PYTHON="$VIRTUAL_ENV/bin/python"
+elif [ -n "$VIRTUAL_ENV" ] && [ -x "$VIRTUAL_ENV/bin/python3" ]; then
+    PYTHON="$VIRTUAL_ENV/bin/python3"
+elif [ -n "$CONDA_DEFAULT_ENV" ] && command -v conda &>/dev/null; then
+    PYTHON="$(conda run -n "$CONDA_DEFAULT_ENV" which python 2>/dev/null)" || PYTHON="python"
+fi
+
 # Check if the package is installed in the current environment
-if ! python -c "import live_vlm_webui" 2>/dev/null; then
+if ! $PYTHON -c "import live_vlm_webui" 2>/dev/null; then
     echo "❌ Error: live_vlm_webui package not found!"
     echo ""
 
@@ -144,7 +154,7 @@ fi
 PORT_IN_USE=false
 
 # Method 1: Try to bind to the port (most reliable)
-if python -c "import socket; s = socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1); s.bind(('0.0.0.0', 8090)); s.close()" 2>/dev/null; then
+if $PYTHON -c "import socket; s = socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1); s.bind(('0.0.0.0', 8090)); s.close()" 2>/dev/null; then
     PORT_IN_USE=false
 else
     PORT_IN_USE=true
@@ -212,7 +222,7 @@ echo ""
 
 # Run server with auto-detection (no --model or --api-base specified)
 # To override, use: ./scripts/start_server.sh --model YOUR_MODEL --api-base YOUR_API
-python -m live_vlm_webui.server \
+$PYTHON -m live_vlm_webui.server \
   --ssl-cert cert.pem \
   --ssl-key key.pem \
   --host 0.0.0.0 \

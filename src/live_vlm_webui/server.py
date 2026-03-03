@@ -1089,11 +1089,15 @@ def main():
 
     args = parser.parse_args()
 
-    # Cloud deployment: env overrides for default API base and frame interval
+    # Cloud deployment: env overrides for default API base, model, and frame interval
     if os.environ.get("LIVE_VLM_API_BASE"):
         if not args.api_base:
             args.api_base = os.environ.get("LIVE_VLM_API_BASE").strip()
             logger.info(f"Using API base from env: {args.api_base}")
+    if os.environ.get("LIVE_VLM_DEFAULT_MODEL"):
+        if not args.model:
+            args.model = os.environ.get("LIVE_VLM_DEFAULT_MODEL").strip()
+            logger.info(f"Using default model from env: {args.model}")
     if os.environ.get("LIVE_VLM_PROCESS_EVERY"):
         try:
             args.process_every = int(os.environ.get("LIVE_VLM_PROCESS_EVERY"))

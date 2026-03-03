@@ -15,7 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - **Multi-session support**: Per-session VLM state and WebSocket routing so multiple tabs/users get isolated streams and config (cloud-friendly).
-- **Cloud deployment config overrides**: Environment variables `LIVE_VLM_API_BASE` and `LIVE_VLM_PROCESS_EVERY` override default API base URL and frame processing interval (e.g. `LIVE_VLM_PROCESS_EVERY=150` for ~5 s interval to reduce API quota; `LIVE_VLM_API_BASE=https://integrate.api.nvidia.com/v1` for default NVIDIA API). Documented in Docker guide with `-e` / `--env-file` examples.
+- **Cloud deployment config overrides**: Environment variables `LIVE_VLM_API_BASE`, `LIVE_VLM_DEFAULT_MODEL`, and `LIVE_VLM_PROCESS_EVERY` override default API base URL, default model, and frame processing interval (e.g. `LIVE_VLM_PROCESS_EVERY=150` for ~5 s interval to reduce API quota; `LIVE_VLM_API_BASE=https://integrate.api.nvidia.com/v1` and `LIVE_VLM_DEFAULT_MODEL=google/gemma-3-4b-it` for NVIDIA API Catalog). Documented in Docker guide with `-e` / `--env-file` examples.
 - **Debug payloads**: In Settings (gear) → Debug: toggles for **Show request payload** and **Show response payload**. Collapsible request JSON (under prompt) and response JSON (under VLM result) for debugging how image and prompt are sent and what the API returns.
 
 ### Fixed
