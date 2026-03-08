@@ -1135,7 +1135,11 @@ def main():
             if not api_base:
                 api_base = "https://integrate.api.nvidia.com/v1"
             if not model:
-                model = "meta/llama-3.2-11b-vision-instruct"
+                model = (
+                    os.environ.get("LIVE_VLM_DEFAULT_MODEL") or "meta/llama-3.2-11b-vision-instruct"
+                ).strip()
+                if os.environ.get("LIVE_VLM_DEFAULT_MODEL"):
+                    logger.info(f"Using default model from env: {model}")
             if api_key == "EMPTY":
                 logger.warning("⚠️  API key required for NVIDIA API Catalog")
                 logger.warning("   Set with: --api-key YOUR_API_KEY")
