@@ -34,6 +34,8 @@ logger = logging.getLogger(__name__)
 class VLMService:
     """Service for analyzing images using VLM via OpenAI-compatible API"""
 
+    EMPTY_RESPONSE_TEXT = "[No text response returned by VLM]"
+
     def __init__(
         self,
         model: str,
@@ -71,6 +73,54 @@ class VLMService:
         self.last_ttft_ms = 0.0
         self.total_inferences = 0
         self.total_inference_time = 0.0
+
+    @classmethod
+    def _normalize_content(cls, content) -> str:
+        """Return text from OpenAI-compatible message content shapes."""
+        if content is None:
+            return ""
+        if isinstance(content, str):
+            return content.strip()
+        if isinstance(content, list):
+            parts = []
+            for item in content:
+                if isinstance(item, str):
+                    parts.append(item)
+                elif isinstance(item, dict):
+                    text = item.get("text")
+                    if text is not None:
+                        parts.append(str(text))
+                else:
+                    text = getattr(item, "text", None)
+                    if text is not None:
+                        parts.append(str(text))
+            return "".join(parts).strip()
+        return str(content).strip()
+
+    @classmethod
+    def _extract_choice_text(cls, response) -> str:
+        """Extract assistant text without assuming message.content is always a string."""
+        choices = getattr(response, "choices", None) or []
+        if not choices:
+            logger.warning("VLM response did not include choices")
+            return cls.EMPTY_RESPONSE_TEXT
+
+        choice = choices[0]
+        message = getattr(choice, "message", None)
+        content = getattr(message, "content", None)
+        result = cls._normalize_content(content)
+        if result:
+            return result
+
+        refusal = cls._normalize_content(getattr(message, "refusal", None))
+        if refusal:
+            return refusal
+
+        logger.warning(
+            "VLM response choice had no text content; finish_reason=%s",
+            getattr(choice, "finish_reason", None),
+        )
+        return cls.EMPTY_RESPONSE_TEXT
 
     async def analyze_image(self, image: Image.Image, prompt: Optional[str] = None) -> str:
         """
@@ -167,7 +217,7 @@ class VLMService:
             self.total_inferences += 1
             self.total_inference_time += inference_time
 
-            result = response.choices[0].message.content.strip()
+            result = self._extract_choice_text(response)
             logger.info(f"VLM response: {result} (latency: {inference_time*1000:.0f}ms)")
             return result
 
@@ -286,7 +336,7 @@ class VLMService:
             self.total_inferences += 1
             self.total_inference_time += inference_time
 
-            result = partial_text.strip()
+            result = partial_text.strip() or self.EMPTY_RESPONSE_TEXT
             self._last_response_payload = {
                 "model": self.model,
                 "choices": [
