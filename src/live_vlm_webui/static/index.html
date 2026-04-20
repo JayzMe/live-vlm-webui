@@ -294,6 +294,12 @@ limitations under the License.
             margin-top: 4px;
         }
 
+        .settings-actions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+
         /* Toggle Switch */
         .toggle-switch {
             position: relative;
@@ -1780,6 +1786,28 @@ limitations under the License.
                                 <span class="toggle-slider"></span>
                             </label>
                         </div>
+
+                        <div class="settings-item">
+                            <div>
+                                <div class="settings-item-label">Log Trigger Metrics</div>
+                                <div class="settings-item-description">Record trigger status, stream timing, and VLM metrics for export</div>
+                            </div>
+                            <label class="toggle-switch">
+                                <input type="checkbox" id="triggerLogToggle">
+                                <span class="toggle-slider"></span>
+                            </label>
+                        </div>
+
+                        <div class="settings-item">
+                            <div>
+                                <div class="settings-item-label">Trigger Log</div>
+                                <div class="settings-item-description"><span id="triggerLogCount">0</span> entries stored in this browser</div>
+                            </div>
+                            <div class="settings-actions">
+                                <button class="btn btn-secondary" id="exportTriggerLogBtn" type="button">Export</button>
+                                <button class="btn btn-secondary" id="clearTriggerLogBtn" type="button">Clear</button>
+                            </div>
+                        </div>
                     </div>
                 </div>
 
@@ -2240,6 +2268,7 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
         let pendingTriggerInferenceId = null;
         let lastStreamMessageTime = null;
         let lastStreamInferenceId = null;
+        let activeTriggerLogId = null;
         let isAnalysisRunning = false;
         let selectedCameraId = null;
         let rtspSessionId = 'default';  // For RTSP mode
@@ -2729,10 +2758,16 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
         const glowToggle = document.getElementById('glowToggle');
         const fadeToggle = document.getElementById('fadeToggle');
         const streamingToggle = document.getElementById('streamingToggle');
+        const triggerLogToggle = document.getElementById('triggerLogToggle');
+        const triggerLogCount = document.getElementById('triggerLogCount');
+        const exportTriggerLogBtn = document.getElementById('exportTriggerLogBtn');
+        const clearTriggerLogBtn = document.getElementById('clearTriggerLogBtn');
         const overlayPosition = document.getElementById('overlayPosition');
         const layoutOrder = document.getElementById('layoutOrder');
         const videoOverlay = document.getElementById('videoOverlay');
         const gpuUpdateInterval = document.getElementById('gpuUpdateInterval');
+        const TRIGGER_LOG_STORAGE_KEY = 'triggerInferenceLog';
+        const MAX_TRIGGER_LOG_ENTRIES = 5000;
 
         // Settings state
         const settings = {
@@ -2740,6 +2775,7 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
             glow: localStorage.getItem('glow') !== 'false',
             fade: localStorage.getItem('fade') !== 'false',
             streamingEnabled: localStorage.getItem('streamingEnabled') === 'true',
+            triggerLogEnabled: localStorage.getItem('triggerLogEnabled') === 'true',
             overlayPosition: localStorage.getItem('overlayPosition') || 'none',
             layoutOrder: localStorage.getItem('layoutOrder') || 'vlm-first',
             gpuUpdateInterval: parseFloat(localStorage.getItem('gpuUpdateInterval')) || 0.25
@@ -2750,9 +2786,253 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
         glowToggle.checked = settings.glow;
         fadeToggle.checked = settings.fade;
         streamingToggle.checked = settings.streamingEnabled;
+        triggerLogToggle.checked = settings.triggerLogEnabled;
         overlayPosition.value = settings.overlayPosition;
         layoutOrder.value = settings.layoutOrder;
         gpuUpdateInterval.value = settings.gpuUpdateInterval;
+
+        function loadTriggerLogEntries() {
+            try {
+                const saved = JSON.parse(localStorage.getItem(TRIGGER_LOG_STORAGE_KEY) || '[]');
+                return Array.isArray(saved) ? saved : [];
+            } catch (error) {
+                console.warn('Failed to load trigger log:', error);
+                return [];
+            }
+        }
+
+        let triggerLogEntries = loadTriggerLogEntries();
+
+        function updateTriggerLogControls() {
+            if (triggerLogCount) {
+                triggerLogCount.textContent = triggerLogEntries.length;
+            }
+            const hasEntries = triggerLogEntries.length > 0;
+            if (exportTriggerLogBtn) {
+                exportTriggerLogBtn.disabled = !hasEntries;
+            }
+            if (clearTriggerLogBtn) {
+                clearTriggerLogBtn.disabled = !hasEntries;
+            }
+        }
+
+        function saveTriggerLogEntries() {
+            if (triggerLogEntries.length > MAX_TRIGGER_LOG_ENTRIES) {
+                triggerLogEntries = triggerLogEntries.slice(-MAX_TRIGGER_LOG_ENTRIES);
+            }
+
+            try {
+                localStorage.setItem(TRIGGER_LOG_STORAGE_KEY, JSON.stringify(triggerLogEntries));
+            } catch (error) {
+                console.warn('Failed to persist trigger log:', error);
+            }
+
+            updateTriggerLogControls();
+        }
+
+        function nowLogStamp(performanceMs = performance.now()) {
+            return {
+                timestamp: new Date().toISOString(),
+                performance_ms: Math.round(performanceMs * 1000) / 1000
+            };
+        }
+
+        function cloneForLog(value) {
+            if (value === undefined) {
+                return null;
+            }
+            return JSON.parse(JSON.stringify(value));
+        }
+
+        function getCurrentInputSource() {
+            const activeTab = document.querySelector('.input-source-tab.active');
+            return activeTab ? activeTab.getAttribute('data-source') : 'webcam';
+        }
+
+        function getActiveTriggerLogEntry() {
+            if (!activeTriggerLogId) {
+                return null;
+            }
+            return triggerLogEntries.find(entry => entry.log_id === activeTriggerLogId) || null;
+        }
+
+        function getTriggerLogEntryByInferenceId(inferenceId) {
+            const parsedId = Number(inferenceId);
+            if (!Number.isFinite(parsedId) || parsedId <= 0) {
+                return null;
+            }
+            return triggerLogEntries.slice().reverse().find(entry => Number(entry.inference_id) === parsedId) || null;
+        }
+
+        function beginTriggerLog() {
+            if (!settings.triggerLogEnabled) {
+                activeTriggerLogId = null;
+                return;
+            }
+
+            const stamp = nowLogStamp();
+            const apiBaseField = document.getElementById('apiBaseUrl');
+            const entry = {
+                log_id: `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+                status: 'requested',
+                inference_id: null,
+                requested_at: stamp.timestamp,
+                requested_performance_ms: stamp.performance_ms,
+                trigger_round_trip_ms: null,
+                first_stream_receive_ms: null,
+                last_stream_receive_ms: null,
+                stream_message_count: 0,
+                last_browser_stream_interval_ms: null,
+                metadata: {
+                    input_source: getCurrentInputSource(),
+                    processing_mode: processMode.value,
+                    streaming_enabled: settings.streamingEnabled,
+                    model: modelSelect.value || null,
+                    api_base: apiBaseField ? apiBaseField.value.trim() : null,
+                    prompt: promptText.value,
+                    max_tokens: Number(maxTokens.value) || null
+                },
+                statuses: [
+                    {
+                        ...stamp,
+                        status: 'requested',
+                        inference_id: null
+                    }
+                ],
+                metrics_events: []
+            };
+
+            triggerLogEntries.push(entry);
+            activeTriggerLogId = entry.log_id;
+            saveTriggerLogEntries();
+        }
+
+        function recordTriggerStatus(data) {
+            if (!settings.triggerLogEnabled) {
+                return;
+            }
+
+            const entry = getActiveTriggerLogEntry();
+            if (!entry) {
+                return;
+            }
+
+            const inferenceId = Number(data.inference_id);
+            if (Number.isFinite(inferenceId) && inferenceId > 0) {
+                entry.inference_id = inferenceId;
+            }
+
+            entry.status = data.status || 'unknown';
+            entry.statuses.push({
+                ...nowLogStamp(),
+                status: entry.status,
+                inference_id: entry.inference_id,
+                raw: cloneForLog(data)
+            });
+
+            if (entry.status !== 'started') {
+                entry.completed_at = new Date().toISOString();
+                activeTriggerLogId = null;
+            }
+
+            saveTriggerLogEntries();
+        }
+
+        function recordTriggerRoundTrip(elapsedMs) {
+            if (!settings.triggerLogEnabled || elapsedMs === null) {
+                return;
+            }
+
+            const entry = getActiveTriggerLogEntry();
+            if (!entry || entry.trigger_round_trip_ms !== null) {
+                return;
+            }
+
+            entry.trigger_round_trip_ms = Math.round(elapsedMs * 1000) / 1000;
+            saveTriggerLogEntries();
+        }
+
+        function recordTriggerMetrics(messageType, data, receivedAtMs, browserStreamIntervalMs) {
+            if (!settings.triggerLogEnabled) {
+                return;
+            }
+
+            const metrics = data.metrics || null;
+            const activeInferenceId = metrics ? Number(metrics.active_inference_id) : NaN;
+            const completedInferenceId = metrics ? Number(metrics.last_completed_inference_id) : NaN;
+            const inferenceId = messageType === 'vlm_response' ? completedInferenceId : activeInferenceId;
+
+            const entry = getActiveTriggerLogEntry() || getTriggerLogEntryByInferenceId(inferenceId);
+            if (!entry) {
+                return;
+            }
+
+            if (Number.isFinite(inferenceId) && inferenceId > 0) {
+                entry.inference_id = inferenceId;
+            }
+
+            const intervalMs = browserStreamIntervalMs === null
+                ? null
+                : Math.round(browserStreamIntervalMs * 1000) / 1000;
+            const event = {
+                ...nowLogStamp(receivedAtMs),
+                message_type: messageType,
+                browser_stream_interval_ms: intervalMs,
+                metrics: cloneForLog(metrics)
+            };
+
+            entry.metrics_events.push(event);
+
+            if (messageType === 'vlm_stream') {
+                entry.stream_message_count += 1;
+                entry.last_stream_receive_ms = event.performance_ms;
+                entry.last_browser_stream_interval_ms = intervalMs;
+                if (entry.first_stream_receive_ms === null) {
+                    entry.first_stream_receive_ms = event.performance_ms;
+                }
+                entry.status = 'streaming';
+            } else if (messageType === 'vlm_response') {
+                entry.status = 'completed';
+                entry.completed_at = event.timestamp;
+                activeTriggerLogId = null;
+            }
+
+            saveTriggerLogEntries();
+        }
+
+        function exportTriggerLog() {
+            if (!triggerLogEntries.length) {
+                return;
+            }
+
+            const payload = {
+                exported_at: new Date().toISOString(),
+                app: 'live-vlm-webui',
+                schema: 'trigger-metrics-log-v1',
+                entries: triggerLogEntries
+            };
+            const blob = new Blob([JSON.stringify(payload, null, 2)], {
+                type: 'application/json'
+            });
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+            link.href = url;
+            link.download = `live-vlm-trigger-log-${timestamp}.json`;
+            document.body.appendChild(link);
+            link.click();
+            link.remove();
+            URL.revokeObjectURL(url);
+        }
+
+        function clearTriggerLog() {
+            triggerLogEntries = [];
+            activeTriggerLogId = null;
+            localStorage.removeItem(TRIGGER_LOG_STORAGE_KEY);
+            updateTriggerLogControls();
+        }
+
+        updateTriggerLogControls();
 
         // Apply overlay position
         function applyOverlayPosition(position) {
@@ -2830,6 +3110,17 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
                 }));
             }
         });
+
+        triggerLogToggle.addEventListener('change', (e) => {
+            settings.triggerLogEnabled = e.target.checked;
+            localStorage.setItem('triggerLogEnabled', settings.triggerLogEnabled);
+            if (!settings.triggerLogEnabled) {
+                activeTriggerLogId = null;
+            }
+        });
+
+        exportTriggerLogBtn.addEventListener('click', exportTriggerLog);
+        clearTriggerLogBtn.addEventListener('click', clearTriggerLog);
 
         colorfulFocusToggle.addEventListener('change', (e) => {
             const enabled = e.target.checked;
@@ -3280,6 +3571,7 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
             triggerStartTime = performance.now();
             triggerPending = true;
             pendingTriggerInferenceId = null;
+            beginTriggerLog();
             if (triggerLatencyValue) {
                 triggerLatencyValue.textContent = '…';
             }
@@ -3324,14 +3616,16 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
 
         function finalizeTriggerRoundTrip() {
             if (!triggerPending || triggerStartTime === null) {
-                return;
+                return null;
             }
             const elapsedMs = performance.now() - triggerStartTime;
             if (triggerLatencyValue) {
                 triggerLatencyValue.textContent = Math.round(elapsedMs);
             }
+            recordTriggerRoundTrip(elapsedMs);
             triggerPending = false;
             triggerStartTime = null;
+            return elapsedMs;
         }
 
         function resetBrowserStreamInterval(clearDisplay = true) {
@@ -3362,7 +3656,9 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
                 }
             }
 
+            const intervalMs = lastStreamMessageTime === null ? null : receivedAtMs - lastStreamMessageTime;
             lastStreamMessageTime = receivedAtMs;
+            return intervalMs;
         }
 
         // Auto-apply processing mode on change
@@ -3755,7 +4051,8 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
 
                 if (data.type === 'vlm_stream') {
                     streamingActive = true;
-                    updateBrowserStreamInterval(data.metrics, receivedAtMs);
+                    const browserStreamIntervalMs = updateBrowserStreamInterval(data.metrics, receivedAtMs);
+                    recordTriggerMetrics(data.type, data, receivedAtMs, browserStreamIntervalMs);
                     if (shouldFinalizeTriggerRoundTrip(data.type, data.metrics)) {
                         finalizeTriggerRoundTrip();
                     }
@@ -3775,6 +4072,7 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
                     }
                 } else if (data.type === 'vlm_response') {
                     streamingActive = false;
+                    recordTriggerMetrics(data.type, data, receivedAtMs, null);
                     resetBrowserStreamInterval(false);
                     if (shouldFinalizeTriggerRoundTrip(data.type, data.metrics)) {
                         finalizeTriggerRoundTrip();
@@ -3900,6 +4198,8 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
                     if (!triggerInferenceBtn) {
                         return;
                     }
+
+                    recordTriggerStatus(data);
 
                     if (data.status === 'started') {
                         bindTriggerInferenceId(data.inference_id);
@@ -4190,6 +4490,10 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
             resultText.classList.remove('fade');
             videoOverlay.textContent = '';
             lastText = '';
+            recordTriggerStatus({
+                status: 'stopped',
+                inference_id: pendingTriggerInferenceId
+            });
             resetTriggerRoundTrip();
             resetBrowserStreamInterval();
         }
