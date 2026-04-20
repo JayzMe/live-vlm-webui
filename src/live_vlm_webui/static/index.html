@@ -1237,7 +1237,9 @@ limitations under the License.
         /* VLM Metrics */
         .metrics-inline {
             display: flex;
+            flex-wrap: wrap;
             gap: 16px;
+            row-gap: 6px;
             font-size: 12px;
             color: var(--text-secondary);
         }
@@ -2106,6 +2108,11 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
                                 <span class="metric-value" id="triggerLatencyValue">--</span>
                                 <span>ms</span>
                             </div>
+                            <div class="metric-item">
+                                <span>Stream IPI:</span>
+                                <span class="metric-value" id="streamIntervalValue">--</span>
+                                <span>ms</span>
+                            </div>
                         </div>
                     </div>
             </div>
@@ -2209,6 +2216,7 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
         const avgLatencyValue = document.getElementById('avgLatencyValue');
         const countValue = document.getElementById('countValue');
         const triggerLatencyValue = document.getElementById('triggerLatencyValue');
+        const streamIntervalValue = document.getElementById('streamIntervalValue');
         const promptPreset = document.getElementById('promptPreset');
         const promptText = document.getElementById('promptText');
         const maxTokens = document.getElementById('maxTokens');
@@ -2230,6 +2238,8 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
         let triggerStartTime = null;
         let triggerPending = false;
         let pendingTriggerInferenceId = null;
+        let lastStreamMessageTime = null;
+        let lastStreamInferenceId = null;
         let isAnalysisRunning = false;
         let selectedCameraId = null;
         let rtspSessionId = 'default';  // For RTSP mode
@@ -3324,6 +3334,37 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
             triggerStartTime = null;
         }
 
+        function resetBrowserStreamInterval(clearDisplay = true) {
+            lastStreamMessageTime = null;
+            lastStreamInferenceId = null;
+            if (clearDisplay && streamIntervalValue) {
+                streamIntervalValue.textContent = '--';
+            }
+        }
+
+        function updateBrowserStreamInterval(metrics, receivedAtMs) {
+            const activeInferenceId = metrics && Number(metrics.active_inference_id);
+            const hasInferenceId = Number.isFinite(activeInferenceId) && activeInferenceId > 0;
+
+            if (hasInferenceId && activeInferenceId !== lastStreamInferenceId) {
+                lastStreamMessageTime = null;
+                lastStreamInferenceId = activeInferenceId;
+            } else if (!hasInferenceId && lastStreamInferenceId !== null) {
+                lastStreamMessageTime = null;
+                lastStreamInferenceId = null;
+            }
+
+            if (streamIntervalValue) {
+                if (lastStreamMessageTime === null) {
+                    streamIntervalValue.textContent = '…';
+                } else {
+                    streamIntervalValue.textContent = Math.round(receivedAtMs - lastStreamMessageTime);
+                }
+            }
+
+            lastStreamMessageTime = receivedAtMs;
+        }
+
         // Auto-apply processing mode on change
         processMode.addEventListener('change', () => {
             const mode = processMode.value;
@@ -3709,10 +3750,12 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
             };
 
             websocket.onmessage = (event) => {
+                const receivedAtMs = performance.now();
                 const data = JSON.parse(event.data);
 
                 if (data.type === 'vlm_stream') {
                     streamingActive = true;
+                    updateBrowserStreamInterval(data.metrics, receivedAtMs);
                     if (shouldFinalizeTriggerRoundTrip(data.type, data.metrics)) {
                         finalizeTriggerRoundTrip();
                     }
@@ -3732,6 +3775,7 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
                     }
                 } else if (data.type === 'vlm_response') {
                     streamingActive = false;
+                    resetBrowserStreamInterval(false);
                     if (shouldFinalizeTriggerRoundTrip(data.type, data.metrics)) {
                         finalizeTriggerRoundTrip();
                     }
@@ -4147,6 +4191,7 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
             videoOverlay.textContent = '';
             lastText = '';
             resetTriggerRoundTrip();
+            resetBrowserStreamInterval();
         }
 
         startBtn.addEventListener('click', start);
