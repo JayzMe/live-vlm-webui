@@ -2794,7 +2794,7 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
         function loadTriggerLogEntries() {
             try {
                 const saved = JSON.parse(localStorage.getItem(TRIGGER_LOG_STORAGE_KEY) || '[]');
-                return Array.isArray(saved) ? saved : [];
+                return Array.isArray(saved) ? saved.map(ensureTriggerLogEntryShape) : [];
             } catch (error) {
                 console.warn('Failed to load trigger log:', error);
                 return [];
@@ -2802,6 +2802,25 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
         }
 
         let triggerLogEntries = loadTriggerLogEntries();
+
+        function ensureTriggerLogEntryShape(entry) {
+            if (!entry || typeof entry !== 'object') {
+                return entry;
+            }
+            if (!Array.isArray(entry.statuses)) {
+                entry.statuses = [];
+            }
+            if (!Array.isArray(entry.metrics_events)) {
+                entry.metrics_events = [];
+            }
+            if (!Array.isArray(entry.browser_stream_intervals)) {
+                entry.browser_stream_intervals = [];
+            }
+            if (!entry.browser_stream_interval_stats) {
+                entry.browser_stream_interval_stats = summarizeBrowserStreamIntervals(entry);
+            }
+            return entry;
+        }
 
         function updateTriggerLogControls() {
             if (triggerLogCount) {
@@ -2844,6 +2863,52 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
             return JSON.parse(JSON.stringify(value));
         }
 
+        function roundMs(value) {
+            return value === null ? null : Math.round(value * 1000) / 1000;
+        }
+
+        function percentile(sortedValues, percentileValue) {
+            if (!sortedValues.length) {
+                return null;
+            }
+            const index = (sortedValues.length - 1) * percentileValue;
+            const lower = Math.floor(index);
+            const upper = Math.ceil(index);
+            if (lower === upper) {
+                return sortedValues[lower];
+            }
+            const weight = index - lower;
+            return sortedValues[lower] * (1 - weight) + sortedValues[upper] * weight;
+        }
+
+        function summarizeBrowserStreamIntervals(entry) {
+            const intervals = (entry.browser_stream_intervals || [])
+                .map(item => item.inter_packet_interval_ms)
+                .filter(value => Number.isFinite(value));
+
+            if (!intervals.length) {
+                return {
+                    interval_count: 0,
+                    avg_ms: null,
+                    min_ms: null,
+                    max_ms: null,
+                    p50_ms: null,
+                    p95_ms: null
+                };
+            }
+
+            const sorted = intervals.slice().sort((a, b) => a - b);
+            const sum = intervals.reduce((total, value) => total + value, 0);
+            return {
+                interval_count: intervals.length,
+                avg_ms: roundMs(sum / intervals.length),
+                min_ms: roundMs(sorted[0]),
+                max_ms: roundMs(sorted[sorted.length - 1]),
+                p50_ms: roundMs(percentile(sorted, 0.5)),
+                p95_ms: roundMs(percentile(sorted, 0.95))
+            };
+        }
+
         function getCurrentInputSource() {
             const activeTab = document.querySelector('.input-source-tab.active');
             return activeTab ? activeTab.getAttribute('data-source') : 'webcam';
@@ -2883,6 +2948,8 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
                 last_stream_receive_ms: null,
                 stream_message_count: 0,
                 last_browser_stream_interval_ms: null,
+                browser_stream_intervals: [],
+                browser_stream_interval_stats: summarizeBrowserStreamIntervals({ browser_stream_intervals: [] }),
                 metadata: {
                     input_source: getCurrentInputSource(),
                     processing_mode: processMode.value,
@@ -2971,9 +3038,9 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
                 entry.inference_id = inferenceId;
             }
 
-            const intervalMs = browserStreamIntervalMs === null
-                ? null
-                : Math.round(browserStreamIntervalMs * 1000) / 1000;
+            ensureTriggerLogEntryShape(entry);
+
+            const intervalMs = roundMs(browserStreamIntervalMs);
             const event = {
                 ...nowLogStamp(receivedAtMs),
                 message_type: messageType,
@@ -2984,9 +3051,19 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
             entry.metrics_events.push(event);
 
             if (messageType === 'vlm_stream') {
-                entry.stream_message_count += 1;
+                const streamSequence = entry.stream_message_count + 1;
+                entry.stream_message_count = streamSequence;
                 entry.last_stream_receive_ms = event.performance_ms;
                 entry.last_browser_stream_interval_ms = intervalMs;
+                entry.browser_stream_intervals.push({
+                    sequence: streamSequence,
+                    received_at: event.timestamp,
+                    receive_performance_ms: event.performance_ms,
+                    inter_packet_interval_ms: intervalMs,
+                    delta_chars: typeof data.delta === 'string' ? data.delta.length : null,
+                    text_chars: typeof data.text === 'string' ? data.text.length : null
+                });
+                entry.browser_stream_interval_stats = summarizeBrowserStreamIntervals(entry);
                 if (entry.first_stream_receive_ms === null) {
                     entry.first_stream_receive_ms = event.performance_ms;
                 }
@@ -2994,6 +3071,7 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
             } else if (messageType === 'vlm_response') {
                 entry.status = 'completed';
                 entry.completed_at = event.timestamp;
+                entry.browser_stream_interval_stats = summarizeBrowserStreamIntervals(entry);
                 activeTriggerLogId = null;
             }
 
@@ -3008,7 +3086,7 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
             const payload = {
                 exported_at: new Date().toISOString(),
                 app: 'live-vlm-webui',
-                schema: 'trigger-metrics-log-v1',
+                schema: 'trigger-metrics-log-v2',
                 entries: triggerLogEntries
             };
             const blob = new Blob([JSON.stringify(payload, null, 2)], {
