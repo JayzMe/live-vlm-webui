@@ -58,7 +58,6 @@ websockets = set()  # Track active WebSocket connections (all)
 gpu_monitor = None  # GPU monitoring instance
 gpu_monitor_task = None  # Background task for GPU monitoring
 rtsp_tracks = {}  # Track active RTSP streams {session_id: (rtsp_track, processor_track)}
-current_processor_track = None
 
 # Multi-session state (0.4.0)
 default_vlm_config = {}  # Set at startup; used to create new sessions
@@ -128,6 +127,15 @@ def get_session_stream_callback(session_id: str):
         )
 
     return callback
+
+
+def clear_session_processor_track(session_id: str, processor_track=None):
+    """Clear a session's processor track if it still points at the provided track."""
+    session = sessions.get(session_id)
+    if not session:
+        return
+    if processor_track is None or session.get("processor_track") is processor_track:
+        session.pop("processor_track", None)
 
 
 def is_port_available(port, host="0.0.0.0"):
@@ -548,47 +556,6 @@ async def websocket_handler(request):
     return ws
 
 
-def broadcast_text_update(text: str, metrics: dict):
-    """Broadcast text update and metrics to all connected WebSocket clients"""
-    if not websockets:
-        return
-
-    message = json.dumps({"type": "vlm_response", "text": text, "metrics": metrics})
-
-    # Send to all connected clients
-    dead_websockets = set()
-    for ws in websockets:
-        try:
-            # Use asyncio to send without blocking
-            asyncio.create_task(ws.send_str(message))
-        except Exception as e:
-            logger.error(f"Error sending to websocket: {e}")
-            dead_websockets.add(ws)
-
-    # Clean up dead connections
-    websockets.difference_update(dead_websockets)
-
-
-def broadcast_stream_update(text: str, delta: str, metrics: dict):
-    """Broadcast streaming text updates to all connected WebSocket clients"""
-    if not websockets:
-        return
-
-    message = json.dumps(
-        {"type": "vlm_stream", "text": text, "delta": delta, "metrics": metrics}
-    )
-
-    dead_websockets = set()
-    for ws in websockets:
-        try:
-            asyncio.create_task(ws.send_str(message))
-        except Exception as e:
-            logger.error(f"Error sending to websocket: {e}")
-            dead_websockets.add(ws)
-
-    websockets.difference_update(dead_websockets)
-
-
 def broadcast_gpu_stats(stats: dict):
     """Broadcast GPU stats to all connected WebSocket clients"""
     if not websockets:
@@ -674,6 +641,7 @@ async def offer(request):
             if rtsp_cleanup_track:
                 rtsp_cleanup_track.stop()
                 logger.info("RTSP track stopped on connection close")
+            clear_session_processor_track(session_id)
             await pc.close()
             pcs.discard(pc)
 
@@ -706,8 +674,6 @@ async def offer(request):
                 text_callback=session_callback,
                 stream_callback=session_stream_callback,
             )
-            global current_processor_track
-            current_processor_track = processor_track
             session["processor_track"] = processor_track
 
             # Add processor directly to peer connection
@@ -735,8 +701,6 @@ async def offer(request):
                     text_callback=session_callback,
                     stream_callback=session_stream_callback,
                 )
-                global current_processor_track
-                current_processor_track = processor_track
                 session["processor_track"] = processor_track
 
                 # Add processed track back to connection
@@ -746,6 +710,7 @@ async def offer(request):
             @track.on("ended")
             async def on_ended():
                 logger.info(f"Track {track.kind} ended")
+                clear_session_processor_track(session_id, processor_track)
 
     # Handle offer
     await pc.setRemoteDescription(offer_sdp)
@@ -813,8 +778,6 @@ async def rtsp_start(request):
             text_callback=session_callback,
             stream_callback=session_stream_callback,
         )
-        global current_processor_track
-        current_processor_track = processor_track
         session["processor_track"] = processor_track
 
         # Start background task to consume frames
@@ -947,6 +910,7 @@ async def _stop_rtsp_session(session_id: str):
 
         # Remove from tracking
         del rtsp_tracks[session_id]
+        clear_session_processor_track(session_id, processor_track)
         logger.info(f"RTSP stream stopped: {session_id}")
     else:
         logger.warning(f"RTSP session {session_id} not found")
