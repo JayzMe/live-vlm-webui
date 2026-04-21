@@ -2137,6 +2137,11 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
                                 <span>ms</span>
                             </div>
                             <div class="metric-item">
+                                <span>Trigger Done:</span>
+                                <span class="metric-value" id="triggerDoneLatencyValue">--</span>
+                                <span>ms</span>
+                            </div>
+                            <div class="metric-item">
                                 <span>Stream IPI:</span>
                                 <span class="metric-value" id="streamIntervalValue">--</span>
                                 <span>ms</span>
@@ -2244,6 +2249,7 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
         const avgLatencyValue = document.getElementById('avgLatencyValue');
         const countValue = document.getElementById('countValue');
         const triggerLatencyValue = document.getElementById('triggerLatencyValue');
+        const triggerDoneLatencyValue = document.getElementById('triggerDoneLatencyValue');
         const streamIntervalValue = document.getElementById('streamIntervalValue');
         const promptPreset = document.getElementById('promptPreset');
         const promptText = document.getElementById('promptText');
@@ -2265,6 +2271,8 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
         let streamingActive = false;
         let triggerStartTime = null;
         let triggerPending = false;
+        let triggerDoneStartTime = null;
+        let triggerDonePending = false;
         let pendingTriggerInferenceId = null;
         let lastStreamMessageTime = null;
         let lastStreamInferenceId = null;
@@ -2826,6 +2834,9 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
             if (!Number.isFinite(entry.last_stream_receive_ms)) {
                 entry.last_stream_receive_ms = null;
             }
+            if (!Number.isFinite(entry.trigger_to_stream_done_ms)) {
+                entry.trigger_to_stream_done_ms = null;
+            }
             if (!entry.browser_stream_interval_stats) {
                 entry.browser_stream_interval_stats = summarizeBrowserStreamIntervals(entry);
             }
@@ -3027,6 +3038,7 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
                 requested_at: stamp.timestamp,
                 requested_performance_ms: stamp.performance_ms,
                 trigger_round_trip_ms: null,
+                trigger_to_stream_done_ms: null,
                 first_stream_receive_ms: null,
                 last_stream_receive_ms: null,
                 stream_message_count: 0,
@@ -3109,6 +3121,20 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
             }
 
             entry.trigger_round_trip_ms = Math.round(elapsedMs * 1000) / 1000;
+            saveTriggerLogEntries();
+        }
+
+        function recordTriggerToStreamDone(elapsedMs, inferenceId) {
+            if (!settings.triggerLogEnabled || elapsedMs === null) {
+                return;
+            }
+
+            const entry = getTriggerLogEntryByInferenceId(inferenceId) || getActiveTriggerLogEntry();
+            if (!entry || entry.trigger_to_stream_done_ms !== null) {
+                return;
+            }
+
+            entry.trigger_to_stream_done_ms = roundMs(elapsedMs);
             saveTriggerLogEntries();
         }
 
@@ -3216,6 +3242,9 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
 
             if (target.trigger_round_trip_ms === null && source.trigger_round_trip_ms !== null) {
                 target.trigger_round_trip_ms = source.trigger_round_trip_ms;
+            }
+            if (target.trigger_to_stream_done_ms === null && source.trigger_to_stream_done_ms !== null) {
+                target.trigger_to_stream_done_ms = source.trigger_to_stream_done_ms;
             }
             if (!target.completed_at && source.completed_at) {
                 target.completed_at = source.completed_at;
@@ -3846,9 +3875,14 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
         function resetTriggerRoundTrip() {
             triggerStartTime = null;
             triggerPending = false;
+            triggerDoneStartTime = null;
+            triggerDonePending = false;
             pendingTriggerInferenceId = null;
             if (triggerLatencyValue) {
                 triggerLatencyValue.textContent = '--';
+            }
+            if (triggerDoneLatencyValue) {
+                triggerDoneLatencyValue.textContent = '--';
             }
         }
 
@@ -3858,10 +3892,15 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
             }
             triggerStartTime = performance.now();
             triggerPending = true;
+            triggerDoneStartTime = triggerStartTime;
+            triggerDonePending = true;
             pendingTriggerInferenceId = null;
             beginTriggerLog();
             if (triggerLatencyValue) {
                 triggerLatencyValue.textContent = '…';
+            }
+            if (triggerDoneLatencyValue) {
+                triggerDoneLatencyValue.textContent = '…';
             }
         }
 
@@ -3913,6 +3952,33 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
             recordTriggerRoundTrip(elapsedMs);
             triggerPending = false;
             triggerStartTime = null;
+            return elapsedMs;
+        }
+
+        function shouldFinalizeTriggerToStreamDone(metrics) {
+            if (!triggerDonePending || triggerDoneStartTime === null || pendingTriggerInferenceId === null) {
+                return false;
+            }
+
+            if (!metrics || typeof metrics !== 'object') {
+                return false;
+            }
+
+            return Number(metrics.last_completed_inference_id) === pendingTriggerInferenceId;
+        }
+
+        function finalizeTriggerToStreamDone(receivedAtMs, metrics) {
+            if (!shouldFinalizeTriggerToStreamDone(metrics)) {
+                return null;
+            }
+
+            const elapsedMs = receivedAtMs - triggerDoneStartTime;
+            if (triggerDoneLatencyValue) {
+                triggerDoneLatencyValue.textContent = Math.round(elapsedMs);
+            }
+            recordTriggerToStreamDone(elapsedMs, Number(metrics.last_completed_inference_id));
+            triggerDoneStartTime = null;
+            triggerDonePending = false;
             return elapsedMs;
         }
 
@@ -4378,6 +4444,7 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
                 } else if (data.type === 'vlm_stream_done') {
                     streamingActive = false;
                     recordTriggerMetrics(data.type, data, receivedAtMs, null);
+                    finalizeTriggerToStreamDone(receivedAtMs, data.metrics);
                     finalizeBrowserStreamIntervalAverage();
                     resetBrowserStreamInterval(false);
                     if (shouldFinalizeTriggerRoundTrip(data.type, data.metrics)) {
