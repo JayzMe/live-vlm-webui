@@ -2268,6 +2268,7 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
         let pendingTriggerInferenceId = null;
         let lastStreamMessageTime = null;
         let lastStreamInferenceId = null;
+        let currentStreamIntervals = [];
         let activeTriggerLogId = null;
         let isAnalysisRunning = false;
         let selectedCameraId = null;
@@ -3731,6 +3732,7 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
         function resetBrowserStreamInterval(clearDisplay = true) {
             lastStreamMessageTime = null;
             lastStreamInferenceId = null;
+            currentStreamIntervals = [];
             if (clearDisplay && streamIntervalValue) {
                 streamIntervalValue.textContent = '--';
             }
@@ -3743,22 +3745,39 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
             if (hasInferenceId && activeInferenceId !== lastStreamInferenceId) {
                 lastStreamMessageTime = null;
                 lastStreamInferenceId = activeInferenceId;
+                currentStreamIntervals = [];
             } else if (!hasInferenceId && lastStreamInferenceId !== null) {
                 lastStreamMessageTime = null;
                 lastStreamInferenceId = null;
+                currentStreamIntervals = [];
             }
 
             if (streamIntervalValue) {
-                if (lastStreamMessageTime === null) {
-                    streamIntervalValue.textContent = '…';
-                } else {
-                    streamIntervalValue.textContent = Math.round(receivedAtMs - lastStreamMessageTime);
-                }
+                streamIntervalValue.textContent = '…';
             }
 
             const intervalMs = lastStreamMessageTime === null ? null : receivedAtMs - lastStreamMessageTime;
+            if (intervalMs !== null) {
+                currentStreamIntervals.push(intervalMs);
+            }
             lastStreamMessageTime = receivedAtMs;
             return intervalMs;
+        }
+
+        function finalizeBrowserStreamIntervalAverage() {
+            if (!streamIntervalValue) {
+                return null;
+            }
+
+            if (!currentStreamIntervals.length) {
+                streamIntervalValue.textContent = '--';
+                return null;
+            }
+
+            const totalMs = currentStreamIntervals.reduce((sum, value) => sum + value, 0);
+            const avgMs = totalMs / currentStreamIntervals.length;
+            streamIntervalValue.textContent = Math.round(avgMs);
+            return avgMs;
         }
 
         // Auto-apply processing mode on change
@@ -4173,6 +4192,7 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
                 } else if (data.type === 'vlm_response') {
                     streamingActive = false;
                     recordTriggerMetrics(data.type, data, receivedAtMs, null);
+                    finalizeBrowserStreamIntervalAverage();
                     resetBrowserStreamInterval(false);
                     if (shouldFinalizeTriggerRoundTrip(data.type, data.metrics)) {
                         finalizeTriggerRoundTrip();
