@@ -2919,6 +2919,13 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
             };
         }
 
+        function shouldKeepMetricsEvent(messageType, entry) {
+            if (messageType === 'vlm_stream') {
+                return entry.stream_message_count === 0;
+            }
+            return messageType === 'vlm_stream_done' || messageType === 'vlm_response';
+        }
+
         function getCurrentInputSource() {
             const activeTab = document.querySelector('.input-source-tab.active');
             return activeTab ? activeTab.getAttribute('data-source') : 'webcam';
@@ -3069,7 +3076,9 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
                 metrics: cloneForLog(metrics)
             };
 
-            entry.metrics_events.push(event);
+            if (shouldKeepMetricsEvent(messageType, entry)) {
+                entry.metrics_events.push(event);
+            }
 
             if (messageType === 'vlm_stream') {
                 const streamSequence = entry.stream_message_count + 1;
@@ -3110,7 +3119,7 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
             const payload = {
                 exported_at: new Date().toISOString(),
                 app: 'live-vlm-webui',
-                schema: 'trigger-metrics-log-v2',
+                schema: 'trigger-metrics-log-v3',
                 entries: triggerLogEntries
             };
             const blob = new Blob([JSON.stringify(payload, null, 2)], {
