@@ -464,13 +464,18 @@ def broadcast_text_update(text: str, metrics: dict):
     websockets.difference_update(dead_websockets)
 
 
-def broadcast_stream_update(text: str, delta: str, metrics: dict):
+def broadcast_stream_update(text: str, delta: str, metrics: dict, done: bool = False):
     """Broadcast streaming text updates to all connected WebSocket clients"""
     if not websockets:
         return
 
     message = json.dumps(
-        {"type": "vlm_stream", "text": text, "delta": delta, "metrics": metrics}
+        {
+            "type": "vlm_stream_done" if done else "vlm_stream",
+            "text": text,
+            "delta": delta,
+            "metrics": metrics,
+        }
     )
 
     dead_websockets = set()

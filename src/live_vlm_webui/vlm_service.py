@@ -262,6 +262,9 @@ class VLMService:
                     response = await self.analyze_image(image, prompt)
                 self.current_response = response
                 self.last_completed_inference_id = inference_id
+                if self.streaming_enabled and stream_callback:
+                    metrics = self.get_metrics()
+                    stream_callback(response, "", metrics, True)
             finally:
                 self.is_processing = False
                 self.active_inference_id = None
