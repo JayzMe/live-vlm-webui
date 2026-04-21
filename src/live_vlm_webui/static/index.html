@@ -2946,6 +2946,32 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
             return triggerLogEntries.slice().reverse().find(entry => Number(entry.inference_id) === parsedId) || null;
         }
 
+        function getTriggerLogEntryForMessage(inferenceId) {
+            const byInferenceId = getTriggerLogEntryByInferenceId(inferenceId);
+            if (byInferenceId) {
+                return byInferenceId;
+            }
+
+            const activeEntry = getActiveTriggerLogEntry();
+            if (!activeEntry) {
+                return null;
+            }
+
+            const activeInferenceId = Number(activeEntry.inference_id);
+            const messageInferenceId = Number(inferenceId);
+            if (
+                Number.isFinite(activeInferenceId)
+                && Number.isFinite(messageInferenceId)
+                && activeInferenceId > 0
+                && messageInferenceId > 0
+                && activeInferenceId !== messageInferenceId
+            ) {
+                return null;
+            }
+
+            return activeEntry;
+        }
+
         function createTriggerLogEntry(status = 'requested', inferenceId = null) {
             const stamp = nowLogStamp();
             const apiBaseField = document.getElementById('apiBaseUrl');
@@ -3052,7 +3078,7 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
             const completedInferenceId = metrics ? Number(metrics.last_completed_inference_id) : NaN;
             const inferenceId = isFinalMessage ? completedInferenceId : activeInferenceId;
 
-            let entry = getActiveTriggerLogEntry() || getTriggerLogEntryByInferenceId(inferenceId);
+            let entry = getTriggerLogEntryForMessage(inferenceId);
             if (!entry && messageType === 'vlm_stream') {
                 entry = createTriggerLogEntry('stream_observed', Number.isFinite(inferenceId) && inferenceId > 0 ? inferenceId : null);
                 activeTriggerLogId = entry.log_id;
@@ -3120,6 +3146,87 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
             saveTriggerLogEntries();
         }
 
+        function uniqueBy(items, keyFn) {
+            const seen = new Set();
+            const result = [];
+            for (const item of items || []) {
+                const key = keyFn(item);
+                if (seen.has(key)) {
+                    continue;
+                }
+                seen.add(key);
+                result.push(item);
+            }
+            return result;
+        }
+
+        function mergeLogEntryInto(target, source) {
+            ensureTriggerLogEntryShape(target);
+            ensureTriggerLogEntryShape(source);
+
+            const sourceInferenceId = Number(source.inference_id);
+            if (!Number.isFinite(Number(target.inference_id)) && Number.isFinite(sourceInferenceId) && sourceInferenceId > 0) {
+                target.inference_id = sourceInferenceId;
+            }
+
+            if (target.trigger_round_trip_ms === null && source.trigger_round_trip_ms !== null) {
+                target.trigger_round_trip_ms = source.trigger_round_trip_ms;
+            }
+            if (!target.completed_at && source.completed_at) {
+                target.completed_at = source.completed_at;
+            }
+            if (source.status === 'completed' || target.status === 'stream_observed') {
+                target.status = source.status;
+            }
+
+            target.statuses = uniqueBy(
+                [...target.statuses, ...source.statuses],
+                item => `${item.performance_ms}:${item.status}:${item.inference_id}`
+            ).sort((a, b) => (a.performance_ms || 0) - (b.performance_ms || 0));
+
+            target.metrics_events = uniqueBy(
+                [...target.metrics_events, ...source.metrics_events],
+                item => `${item.performance_ms}:${item.message_type}`
+            ).sort((a, b) => (a.performance_ms || 0) - (b.performance_ms || 0));
+
+            target.browser_stream_intervals = uniqueBy(
+                [...target.browser_stream_intervals, ...source.browser_stream_intervals],
+                item => `${item.receive_performance_ms}:${item.delta_chars}:${item.text_chars}`
+            ).sort((a, b) => (a.receive_performance_ms || 0) - (b.receive_performance_ms || 0));
+
+            target.browser_stream_intervals.forEach((item, index) => {
+                item.sequence = index + 1;
+            });
+            target.stream_message_count = target.browser_stream_intervals.length;
+            target.first_stream_receive_ms = target.browser_stream_intervals[0]?.receive_performance_ms ?? null;
+            target.last_stream_receive_ms = target.browser_stream_intervals[target.browser_stream_intervals.length - 1]?.receive_performance_ms ?? null;
+            target.last_browser_stream_interval_ms = target.browser_stream_intervals[target.browser_stream_intervals.length - 1]?.inter_packet_interval_ms ?? null;
+            target.browser_stream_interval_stats = summarizeBrowserStreamIntervals(target);
+        }
+
+        function getExportLogEntries() {
+            const mergedEntries = [];
+            const byInferenceId = new Map();
+
+            for (const rawEntry of triggerLogEntries) {
+                const entry = ensureTriggerLogEntryShape(cloneForLog(rawEntry));
+                const inferenceId = Number(entry.inference_id);
+                if (Number.isFinite(inferenceId) && inferenceId > 0) {
+                    const existing = byInferenceId.get(inferenceId);
+                    if (existing) {
+                        mergeLogEntryInto(existing, entry);
+                    } else {
+                        byInferenceId.set(inferenceId, entry);
+                        mergedEntries.push(entry);
+                    }
+                } else {
+                    mergedEntries.push(entry);
+                }
+            }
+
+            return mergedEntries;
+        }
+
         function exportTriggerLog() {
             if (!triggerLogEntries.length) {
                 return;
@@ -3128,8 +3235,8 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
             const payload = {
                 exported_at: new Date().toISOString(),
                 app: 'live-vlm-webui',
-                schema: 'trigger-metrics-log-v4',
-                entries: triggerLogEntries.map(entry => ensureTriggerLogEntryShape(entry))
+                schema: 'trigger-metrics-log-v5',
+                entries: getExportLogEntries()
             };
             const blob = new Blob([JSON.stringify(payload, null, 2)], {
                 type: 'application/json'
