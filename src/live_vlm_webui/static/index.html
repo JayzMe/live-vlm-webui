@@ -2922,26 +2922,27 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
         }
 
         function compactMetricsEvents(events) {
-            const compacted = [];
-            let keptFirstStream = false;
+            let firstStreamEvent = null;
+            let lastStreamDoneEvent = null;
+            let lastResponseEvent = null;
 
             for (const event of events || []) {
                 if (!event || typeof event !== 'object') {
                     continue;
                 }
                 if (event.message_type === 'vlm_stream') {
-                    if (keptFirstStream) {
-                        continue;
+                    if (!firstStreamEvent) {
+                        firstStreamEvent = event;
                     }
-                    keptFirstStream = true;
-                    compacted.push(event);
-                } else if (event.message_type === 'vlm_stream_done' || event.message_type === 'vlm_response') {
-                    compacted.push(event);
+                } else if (event.message_type === 'vlm_stream_done') {
+                    lastStreamDoneEvent = event;
+                } else if (event.message_type === 'vlm_response') {
+                    lastResponseEvent = event;
                 }
             }
 
             return uniqueBy(
-                compacted,
+                [firstStreamEvent, lastStreamDoneEvent, lastResponseEvent].filter(Boolean),
                 item => `${item.performance_ms}:${item.message_type}`
             ).sort((a, b) => (a.performance_ms || 0) - (b.performance_ms || 0));
         }
@@ -2951,6 +2952,23 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
                 return entry.stream_message_count === 0;
             }
             return messageType === 'vlm_stream_done' || messageType === 'vlm_response';
+        }
+
+        function upsertMetricsEvent(entry, event) {
+            entry.metrics_events = compactMetricsEvents(entry.metrics_events);
+
+            if (event.message_type === 'vlm_stream') {
+                if (!entry.metrics_events.some(item => item.message_type === 'vlm_stream')) {
+                    entry.metrics_events.push(event);
+                }
+            } else if (event.message_type === 'vlm_stream_done' || event.message_type === 'vlm_response') {
+                entry.metrics_events = entry.metrics_events.filter(
+                    item => item.message_type !== event.message_type
+                );
+                entry.metrics_events.push(event);
+            }
+
+            entry.metrics_events = compactMetricsEvents(entry.metrics_events);
         }
 
         function getCurrentInputSource() {
@@ -3139,7 +3157,7 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
             };
 
             if (shouldKeepMetricsEvent(messageType, entry)) {
-                entry.metrics_events.push(event);
+                upsertMetricsEvent(entry, event);
             }
 
             if (messageType === 'vlm_stream') {
