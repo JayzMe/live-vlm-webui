@@ -3204,6 +3204,22 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
             target.browser_stream_interval_stats = summarizeBrowserStreamIntervals(target);
         }
 
+        function shouldExportLogEntry(entry) {
+            ensureTriggerLogEntryShape(entry);
+
+            const inferenceId = Number(entry.inference_id);
+            if (Number.isFinite(inferenceId) && inferenceId > 0) {
+                return true;
+            }
+
+            if (entry.browser_stream_intervals.length > 0) {
+                return true;
+            }
+
+            const retainedStatuses = new Set(['busy', 'no_frame', 'no_track', 'failed']);
+            return entry.statuses.some(statusEvent => retainedStatuses.has(statusEvent.status));
+        }
+
         function getExportLogEntries() {
             const mergedEntries = [];
             const byInferenceId = new Map();
@@ -3224,7 +3240,7 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
                 }
             }
 
-            return mergedEntries;
+            return mergedEntries.filter(shouldExportLogEntry);
         }
 
         function exportTriggerLog() {
@@ -3235,7 +3251,7 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
             const payload = {
                 exported_at: new Date().toISOString(),
                 app: 'live-vlm-webui',
-                schema: 'trigger-metrics-log-v5',
+                schema: 'trigger-metrics-log-v6',
                 entries: getExportLogEntries()
             };
             const blob = new Blob([JSON.stringify(payload, null, 2)], {
