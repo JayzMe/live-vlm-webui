@@ -2829,19 +2829,21 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
             if (!entry.browser_stream_interval_stats) {
                 entry.browser_stream_interval_stats = summarizeBrowserStreamIntervals(entry);
             }
+            entry.metrics_events = compactMetricsEvents(entry.metrics_events);
             return entry;
         }
 
         function updateTriggerLogControls() {
+            const exportableCount = getExportLogEntries().length;
             if (triggerLogCount) {
-                triggerLogCount.textContent = triggerLogEntries.length;
+                triggerLogCount.textContent = exportableCount;
             }
-            const hasEntries = triggerLogEntries.length > 0;
+            const hasEntries = exportableCount > 0;
             if (exportTriggerLogBtn) {
                 exportTriggerLogBtn.disabled = !hasEntries;
             }
             if (clearTriggerLogBtn) {
-                clearTriggerLogBtn.disabled = !hasEntries;
+                clearTriggerLogBtn.disabled = triggerLogEntries.length === 0;
             }
         }
 
@@ -2917,6 +2919,31 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
                 p50_ms: roundMs(percentile(sorted, 0.5)),
                 p95_ms: roundMs(percentile(sorted, 0.95))
             };
+        }
+
+        function compactMetricsEvents(events) {
+            const compacted = [];
+            let keptFirstStream = false;
+
+            for (const event of events || []) {
+                if (!event || typeof event !== 'object') {
+                    continue;
+                }
+                if (event.message_type === 'vlm_stream') {
+                    if (keptFirstStream) {
+                        continue;
+                    }
+                    keptFirstStream = true;
+                    compacted.push(event);
+                } else if (event.message_type === 'vlm_stream_done' || event.message_type === 'vlm_response') {
+                    compacted.push(event);
+                }
+            }
+
+            return uniqueBy(
+                compacted,
+                item => `${item.performance_ms}:${item.message_type}`
+            ).sort((a, b) => (a.performance_ms || 0) - (b.performance_ms || 0));
         }
 
         function shouldKeepMetricsEvent(messageType, entry) {
