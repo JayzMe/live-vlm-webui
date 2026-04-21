@@ -2946,18 +2946,13 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
             return triggerLogEntries.slice().reverse().find(entry => Number(entry.inference_id) === parsedId) || null;
         }
 
-        function beginTriggerLog() {
-            if (!settings.triggerLogEnabled) {
-                activeTriggerLogId = null;
-                return;
-            }
-
+        function createTriggerLogEntry(status = 'requested', inferenceId = null) {
             const stamp = nowLogStamp();
             const apiBaseField = document.getElementById('apiBaseUrl');
             const entry = {
                 log_id: `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
-                status: 'requested',
-                inference_id: null,
+                status,
+                inference_id: inferenceId,
                 requested_at: stamp.timestamp,
                 requested_performance_ms: stamp.performance_ms,
                 trigger_round_trip_ms: null,
@@ -2979,14 +2974,24 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
                 statuses: [
                     {
                         ...stamp,
-                        status: 'requested',
-                        inference_id: null
+                        status,
+                        inference_id: inferenceId
                     }
                 ],
                 metrics_events: []
             };
 
             triggerLogEntries.push(entry);
+            return entry;
+        }
+
+        function beginTriggerLog() {
+            if (!settings.triggerLogEnabled) {
+                activeTriggerLogId = null;
+                return;
+            }
+
+            const entry = createTriggerLogEntry();
             activeTriggerLogId = entry.log_id;
             saveTriggerLogEntries();
         }
@@ -3047,7 +3052,11 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
             const completedInferenceId = metrics ? Number(metrics.last_completed_inference_id) : NaN;
             const inferenceId = isFinalMessage ? completedInferenceId : activeInferenceId;
 
-            const entry = getActiveTriggerLogEntry() || getTriggerLogEntryByInferenceId(inferenceId);
+            let entry = getActiveTriggerLogEntry() || getTriggerLogEntryByInferenceId(inferenceId);
+            if (!entry && messageType === 'vlm_stream') {
+                entry = createTriggerLogEntry('stream_observed', Number.isFinite(inferenceId) && inferenceId > 0 ? inferenceId : null);
+                activeTriggerLogId = entry.log_id;
+            }
             if (!entry) {
                 return;
             }
@@ -3119,8 +3128,8 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
             const payload = {
                 exported_at: new Date().toISOString(),
                 app: 'live-vlm-webui',
-                schema: 'trigger-metrics-log-v3',
-                entries: triggerLogEntries
+                schema: 'trigger-metrics-log-v4',
+                entries: triggerLogEntries.map(entry => ensureTriggerLogEntryShape(entry))
             };
             const blob = new Blob([JSON.stringify(payload, null, 2)], {
                 type: 'application/json'
