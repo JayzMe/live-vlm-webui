@@ -949,12 +949,147 @@ limitations under the License.
             word-wrap: break-word;
         }
 
+        .response-timeline {
+            margin: 12px 0 10px;
+            padding: 2px 0 0;
+        }
+
+        .response-timeline-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            margin-bottom: 8px;
+            font-size: 12px;
+            color: var(--text-secondary);
+        }
+
+        .response-timeline-title {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+
+        .response-timeline-title .lucide {
+            width: 14px;
+            height: 14px;
+            color: var(--accent-color);
+        }
+
+        .response-timeline-meta {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            min-width: 0;
+            text-align: right;
+            color: var(--text-muted);
+        }
+
+        .response-timeline-status {
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            max-width: 220px;
+        }
+
+        .response-timeline-duration {
+            color: var(--accent-color);
+            font-weight: 600;
+            white-space: nowrap;
+        }
+
+        .response-timeline-track {
+            position: relative;
+            height: 36px;
+            border-top: 1px solid var(--border-color);
+            border-bottom: 1px solid var(--border-color);
+            background: var(--bg-secondary);
+            overflow: hidden;
+        }
+
+        .response-timeline-window,
+        .response-timeline-stream-window {
+            position: absolute;
+            top: 0;
+            bottom: 0;
+            left: 0;
+            width: 0;
+            pointer-events: none;
+        }
+
+        .response-timeline-window {
+            background: rgba(118, 185, 71, 0.12);
+        }
+
+        .response-timeline-stream-window {
+            background: rgba(59, 130, 246, 0.16);
+        }
+
+        .response-timeline-baseline {
+            position: absolute;
+            left: 0;
+            right: 0;
+            top: 50%;
+            height: 1px;
+            background: var(--border-color);
+            transform: translateY(-50%);
+        }
+
+        .response-timeline-marker {
+            position: absolute;
+            top: 6px;
+            bottom: 6px;
+            width: 2px;
+            min-width: 2px;
+            border-radius: 2px;
+            transform: translateX(-1px);
+            background: var(--text-muted);
+        }
+
+        .response-timeline-marker.trigger {
+            width: 3px;
+            background: var(--accent-color);
+            box-shadow: 0 0 0 2px rgba(118, 185, 71, 0.18);
+        }
+
+        .response-timeline-marker.stream {
+            top: 11px;
+            bottom: 11px;
+            background: #3b82f6;
+        }
+
+        .response-timeline-marker.done {
+            width: 3px;
+            background: #a855f7;
+            box-shadow: 0 0 0 2px rgba(168, 85, 247, 0.16);
+        }
+
+        .response-timeline-marker.response {
+            width: 3px;
+            background: #f59e0b;
+        }
+
+        .response-timeline-marker.failed {
+            width: 3px;
+            background: #ef4444;
+        }
+
+        .response-timeline-axis {
+            display: flex;
+            justify-content: space-between;
+            margin-top: 5px;
+            font-size: 11px;
+            color: var(--text-muted);
+        }
+
         .result-text {
             font-size: 15px;
             line-height: 1.6;
             color: var(--text-primary);
             transition: opacity 3s ease, transform 0.3s ease, box-shadow 0.3s ease;
-            min-height: 120px;
+            min-height: 88px;
             margin-top: 12px;
             margin-left: 0;
             margin-right: auto;
@@ -970,6 +1105,9 @@ limitations under the License.
         .result-text-content {
             /* Content wrapper - this is what gets updated, not the parent */
             width: 100%;
+            max-height: 220px;
+            overflow-y: auto;
+            padding-right: 8px;
         }
 
         /* Embedded markdown toggle button */
@@ -2151,6 +2289,28 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
             </div>
 
                 <div class="result-prompt" id="currentPrompt"></div>
+                <div class="response-timeline" id="responseTimeline">
+                    <div class="response-timeline-header">
+                        <div class="response-timeline-title">
+                            <i data-lucide="timer"></i>
+                            <span>Response Timeline</span>
+                        </div>
+                        <div class="response-timeline-meta">
+                            <span class="response-timeline-status" id="responseTimelineStatus">No trigger yet</span>
+                            <span class="response-timeline-duration" id="responseTimelineDuration">0 ms</span>
+                        </div>
+                    </div>
+                    <div class="response-timeline-track" id="responseTimelineTrack">
+                        <div class="response-timeline-window" id="responseTimelineWindow"></div>
+                        <div class="response-timeline-stream-window" id="responseTimelineStreamWindow"></div>
+                        <div class="response-timeline-baseline"></div>
+                        <div id="responseTimelineMarkers"></div>
+                    </div>
+                    <div class="response-timeline-axis">
+                        <span>0 ms</span>
+                        <span id="responseTimelineEndLabel">1000 ms</span>
+                    </div>
+                </div>
                 <div class="result-text" id="resultText">
                     <button class="markdown-toggle-embedded" id="markdownToggle" title="Toggle Markdown Rendering">
                         <span id="markdownIcon"><i data-lucide="code"></i></span>
@@ -2251,6 +2411,12 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
         const triggerLatencyValue = document.getElementById('triggerLatencyValue');
         const triggerDoneLatencyValue = document.getElementById('triggerDoneLatencyValue');
         const streamIntervalValue = document.getElementById('streamIntervalValue');
+        const responseTimelineStatus = document.getElementById('responseTimelineStatus');
+        const responseTimelineDuration = document.getElementById('responseTimelineDuration');
+        const responseTimelineEndLabel = document.getElementById('responseTimelineEndLabel');
+        const responseTimelineWindow = document.getElementById('responseTimelineWindow');
+        const responseTimelineStreamWindow = document.getElementById('responseTimelineStreamWindow');
+        const responseTimelineMarkers = document.getElementById('responseTimelineMarkers');
         const promptPreset = document.getElementById('promptPreset');
         const promptText = document.getElementById('promptText');
         const maxTokens = document.getElementById('maxTokens');
@@ -2279,6 +2445,7 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
         let lastStreamMessageTime = null;
         let lastStreamInferenceId = null;
         let currentStreamIntervals = [];
+        let responseTimelineState = createResponseTimelineState();
         let activeTriggerLogId = null;
         let isAnalysisRunning = false;
         let selectedCameraId = null;
@@ -2664,6 +2831,7 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
             } else {
                 contentDiv.textContent = text;
             }
+            contentDiv.scrollTop = contentDiv.scrollHeight;
         }
 
         // Enumerate cameras on page load
@@ -3875,6 +4043,245 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
             mirrorBtn.classList.toggle('active');
         });
 
+        function createResponseTimelineState() {
+            return {
+                active: false,
+                startMs: null,
+                inferenceId: null,
+                firstStreamMs: null,
+                doneMs: null,
+                responseMs: null,
+                failedMs: null,
+                events: [],
+                streamCount: 0,
+                rafId: null,
+                status: 'No trigger yet'
+            };
+        }
+
+        function roundTimelineMs(value) {
+            return Math.max(0, Math.round(value || 0));
+        }
+
+        function formatTimelineMs(value) {
+            return `${roundTimelineMs(value)} ms`;
+        }
+
+        function stopResponseTimelineAnimation() {
+            if (responseTimelineState.rafId !== null) {
+                cancelAnimationFrame(responseTimelineState.rafId);
+                responseTimelineState.rafId = null;
+            }
+        }
+
+        function beginResponseTimeline(startMs) {
+            stopResponseTimelineAnimation();
+            responseTimelineState = createResponseTimelineState();
+            responseTimelineState.active = true;
+            responseTimelineState.startMs = startMs;
+            responseTimelineState.status = 'Trigger sent';
+            responseTimelineState.events.push({
+                type: 'trigger',
+                elapsedMs: 0,
+                label: 'Trigger sent'
+            });
+            renderResponseTimeline();
+            scheduleResponseTimelineRender();
+        }
+
+        function resetResponseTimeline(status = 'No trigger yet') {
+            stopResponseTimelineAnimation();
+            responseTimelineState = createResponseTimelineState();
+            responseTimelineState.status = status;
+            renderResponseTimeline();
+        }
+
+        function scheduleResponseTimelineRender() {
+            if (!responseTimelineState.active || responseTimelineState.rafId !== null) {
+                return;
+            }
+
+            responseTimelineState.rafId = requestAnimationFrame(() => {
+                responseTimelineState.rafId = null;
+                renderResponseTimeline();
+                if (responseTimelineState.active) {
+                    scheduleResponseTimelineRender();
+                }
+            });
+        }
+
+        function getTimelineElapsed(receivedAtMs = performance.now()) {
+            if (responseTimelineState.startMs === null) {
+                return 0;
+            }
+            return Math.max(0, receivedAtMs - responseTimelineState.startMs);
+        }
+
+        function bindResponseTimelineInferenceId(inferenceId) {
+            const parsedId = Number(inferenceId);
+            if (!Number.isFinite(parsedId) || parsedId <= 0) {
+                return;
+            }
+            responseTimelineState.inferenceId = parsedId;
+            if (responseTimelineState.active && responseTimelineState.status === 'Trigger sent') {
+                responseTimelineState.status = `Inference ${parsedId} started`;
+                renderResponseTimeline();
+            }
+        }
+
+        function timelineMatchesMetrics(messageType, metrics) {
+            if (!responseTimelineState.active || !metrics || typeof metrics !== 'object') {
+                return false;
+            }
+
+            const activeInferenceId = Number(metrics.active_inference_id);
+            const completedInferenceId = Number(metrics.last_completed_inference_id);
+            const expectedInferenceId = responseTimelineState.inferenceId || pendingTriggerInferenceId;
+
+            if (!Number.isFinite(expectedInferenceId) || expectedInferenceId <= 0) {
+                return false;
+            }
+
+            if (messageType === 'vlm_stream') {
+                return activeInferenceId === expectedInferenceId;
+            }
+
+            if (messageType === 'vlm_stream_done' || messageType === 'vlm_response') {
+                return completedInferenceId === expectedInferenceId;
+            }
+
+            return false;
+        }
+
+        function addResponseTimelineEvent(messageType, receivedAtMs, metrics) {
+            if (!timelineMatchesMetrics(messageType, metrics)) {
+                return;
+            }
+
+            const elapsedMs = getTimelineElapsed(receivedAtMs);
+            const activeInferenceId = Number(metrics.active_inference_id);
+            const completedInferenceId = Number(metrics.last_completed_inference_id);
+
+            if (messageType === 'vlm_stream' && responseTimelineState.inferenceId === null && Number.isFinite(activeInferenceId)) {
+                responseTimelineState.inferenceId = activeInferenceId;
+            } else if (messageType !== 'vlm_stream' && responseTimelineState.inferenceId === null && Number.isFinite(completedInferenceId)) {
+                responseTimelineState.inferenceId = completedInferenceId;
+            }
+
+            if (messageType === 'vlm_stream') {
+                if (responseTimelineState.firstStreamMs === null) {
+                    responseTimelineState.firstStreamMs = elapsedMs;
+                }
+                responseTimelineState.streamCount += 1;
+                responseTimelineState.events.push({
+                    type: 'stream',
+                    elapsedMs,
+                    label: `Stream ${responseTimelineState.streamCount}`
+                });
+                responseTimelineState.status = `Streaming ${formatTimelineMs(elapsedMs)}`;
+            } else if (messageType === 'vlm_stream_done') {
+                responseTimelineState.doneMs = elapsedMs;
+                if (!responseTimelineState.events.some(item => item.type === 'done')) {
+                    responseTimelineState.events.push({
+                        type: 'done',
+                        elapsedMs,
+                        label: 'Stream done'
+                    });
+                }
+                responseTimelineState.status = `Done in ${formatTimelineMs(elapsedMs)}`;
+                responseTimelineState.active = false;
+                stopResponseTimelineAnimation();
+            } else if (messageType === 'vlm_response') {
+                responseTimelineState.responseMs = elapsedMs;
+                if (!responseTimelineState.events.some(item => item.type === 'response')) {
+                    responseTimelineState.events.push({
+                        type: 'response',
+                        elapsedMs,
+                        label: 'Final response'
+                    });
+                }
+                if (responseTimelineState.doneMs === null) {
+                    responseTimelineState.status = `Response in ${formatTimelineMs(elapsedMs)}`;
+                    responseTimelineState.active = false;
+                    stopResponseTimelineAnimation();
+                }
+            }
+
+            renderResponseTimeline();
+        }
+
+        function markResponseTimelineFailed(status) {
+            if (!responseTimelineState.active) {
+                return;
+            }
+            const elapsedMs = getTimelineElapsed();
+            responseTimelineState.failedMs = elapsedMs;
+            responseTimelineState.events.push({
+                type: 'failed',
+                elapsedMs,
+                label: status || 'Trigger failed'
+            });
+            responseTimelineState.status = status || 'Trigger failed';
+            responseTimelineState.active = false;
+            stopResponseTimelineAnimation();
+            renderResponseTimeline();
+        }
+
+        function getResponseTimelineDuration() {
+            const elapsedMs = responseTimelineState.active ? getTimelineElapsed() : 0;
+            const eventMaxMs = responseTimelineState.events.reduce((maxMs, event) => Math.max(maxMs, event.elapsedMs), 0);
+            const endMs = responseTimelineState.doneMs
+                ?? responseTimelineState.responseMs
+                ?? responseTimelineState.failedMs
+                ?? elapsedMs
+                ?? eventMaxMs;
+            return Math.max(1000, endMs, eventMaxMs);
+        }
+
+        function renderResponseTimeline() {
+            if (!responseTimelineMarkers || !responseTimelineStatus || !responseTimelineDuration) {
+                return;
+            }
+
+            const durationMs = getResponseTimelineDuration();
+            const visibleEndMs = responseTimelineState.doneMs
+                ?? responseTimelineState.responseMs
+                ?? responseTimelineState.failedMs
+                ?? (responseTimelineState.active ? getTimelineElapsed() : 0);
+            const responseEndPercent = Math.min(100, (visibleEndMs / durationMs) * 100);
+            const streamEndMs = responseTimelineState.doneMs ?? (responseTimelineState.active ? getTimelineElapsed() : null);
+
+            responseTimelineStatus.textContent = responseTimelineState.status;
+            responseTimelineDuration.textContent = formatTimelineMs(visibleEndMs);
+            if (responseTimelineEndLabel) {
+                responseTimelineEndLabel.textContent = formatTimelineMs(durationMs);
+            }
+            if (responseTimelineWindow) {
+                responseTimelineWindow.style.width = `${responseEndPercent}%`;
+            }
+            if (responseTimelineStreamWindow) {
+                if (responseTimelineState.firstStreamMs !== null && streamEndMs !== null) {
+                    const left = Math.min(100, (responseTimelineState.firstStreamMs / durationMs) * 100);
+                    const right = Math.min(100, (streamEndMs / durationMs) * 100);
+                    responseTimelineStreamWindow.style.left = `${left}%`;
+                    responseTimelineStreamWindow.style.width = `${Math.max(0, right - left)}%`;
+                } else {
+                    responseTimelineStreamWindow.style.left = '0';
+                    responseTimelineStreamWindow.style.width = '0';
+                }
+            }
+
+            const fragment = document.createDocumentFragment();
+            responseTimelineState.events.forEach((item) => {
+                const marker = document.createElement('span');
+                marker.className = `response-timeline-marker ${item.type}`;
+                marker.style.left = `${Math.min(100, (item.elapsedMs / durationMs) * 100)}%`;
+                marker.title = `${item.label}: ${formatTimelineMs(item.elapsedMs)}`;
+                fragment.appendChild(marker);
+            });
+            responseTimelineMarkers.replaceChildren(fragment);
+        }
+
         function setProcessingModeUI(mode) {
             const isPeriodic = mode === 'periodic';
             processEvery.disabled = !isPeriodic;
@@ -3886,7 +4293,7 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
             }
         }
 
-        function resetTriggerRoundTrip() {
+        function resetTriggerRoundTrip(clearTimeline = true) {
             triggerStartTime = null;
             triggerPending = false;
             triggerDoneStartTime = null;
@@ -3897,6 +4304,9 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
             }
             if (triggerDoneLatencyValue) {
                 triggerDoneLatencyValue.textContent = '--';
+            }
+            if (clearTimeline) {
+                resetResponseTimeline();
             }
         }
 
@@ -3909,6 +4319,7 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
             triggerDoneStartTime = triggerStartTime;
             triggerDonePending = true;
             pendingTriggerInferenceId = null;
+            beginResponseTimeline(triggerStartTime);
             beginTriggerLog();
             if (triggerLatencyValue) {
                 triggerLatencyValue.textContent = '…';
@@ -3925,6 +4336,7 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
             const parsedId = Number(inferenceId);
             if (Number.isFinite(parsedId) && parsedId > 0) {
                 pendingTriggerInferenceId = parsedId;
+                bindResponseTimelineInferenceId(parsedId);
             }
         }
 
@@ -4481,6 +4893,7 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
                     streamingActive = true;
                     const browserStreamIntervalMs = updateBrowserStreamInterval(data.metrics, receivedAtMs);
                     recordTriggerMetrics(data.type, data, receivedAtMs, browserStreamIntervalMs);
+                    addResponseTimelineEvent(data.type, receivedAtMs, data.metrics);
                     if (shouldFinalizeTriggerRoundTrip(data.type, data.metrics)) {
                         finalizeTriggerRoundTrip();
                     }
@@ -4502,6 +4915,7 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
                     const streamText = finalizeStreamText(data);
                     streamingActive = false;
                     recordTriggerMetrics(data.type, data, receivedAtMs, null);
+                    addResponseTimelineEvent(data.type, receivedAtMs, data.metrics);
                     finalizeTriggerToStreamDone(receivedAtMs, data.metrics);
                     finalizeBrowserStreamIntervalAverage();
                     resetBrowserStreamInterval(false);
@@ -4524,6 +4938,7 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
                     streamingActive = false;
                     resetStreamTextBuffer();
                     recordTriggerMetrics(data.type, data, receivedAtMs, null);
+                    addResponseTimelineEvent(data.type, receivedAtMs, data.metrics);
                     finalizeBrowserStreamIntervalAverage();
                     resetBrowserStreamInterval(false);
                     if (shouldFinalizeTriggerRoundTrip(data.type, data.metrics)) {
@@ -4657,16 +5072,20 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
                         bindTriggerInferenceId(data.inference_id);
                         triggerInferenceBtn.textContent = 'Triggered!';
                     } else if (data.status === 'busy') {
-                        resetTriggerRoundTrip();
+                        markResponseTimelineFailed('Still processing');
+                        resetTriggerRoundTrip(false);
                         triggerInferenceBtn.textContent = 'Still processing';
                     } else if (data.status === 'no_frame') {
-                        resetTriggerRoundTrip();
+                        markResponseTimelineFailed('No frame yet');
+                        resetTriggerRoundTrip(false);
                         triggerInferenceBtn.textContent = 'No frame yet';
                     } else if (data.status === 'no_track') {
-                        resetTriggerRoundTrip();
+                        markResponseTimelineFailed('No active stream');
+                        resetTriggerRoundTrip(false);
                         triggerInferenceBtn.textContent = 'No active stream';
                     } else {
-                        resetTriggerRoundTrip();
+                        markResponseTimelineFailed('Trigger failed');
+                        resetTriggerRoundTrip(false);
                         triggerInferenceBtn.textContent = 'Trigger failed';
                     }
 
