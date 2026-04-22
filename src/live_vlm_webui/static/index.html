@@ -2268,6 +2268,8 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
         let websocket = null;
         let fadeTimeout = null;
         let lastText = '';
+        let streamTextBuffer = '';
+        let streamTextInferenceId = null;
         let streamingActive = false;
         let triggerStartTime = null;
         let triggerPending = false;
@@ -4032,6 +4034,48 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
             return avgMs;
         }
 
+        function getStreamInferenceId(metrics, finalMessage = false) {
+            if (!metrics || typeof metrics !== 'object') {
+                return null;
+            }
+
+            const rawId = finalMessage
+                ? metrics.last_completed_inference_id
+                : metrics.active_inference_id;
+            const parsedId = Number(rawId);
+            return Number.isFinite(parsedId) && parsedId > 0 ? parsedId : null;
+        }
+
+        function resetStreamTextBuffer(inferenceId = null) {
+            streamTextBuffer = '';
+            streamTextInferenceId = inferenceId;
+        }
+
+        function appendStreamDelta(data) {
+            const inferenceId = getStreamInferenceId(data.metrics);
+            if (inferenceId !== null && inferenceId !== streamTextInferenceId) {
+                resetStreamTextBuffer(inferenceId);
+            } else if (!streamingActive && streamTextBuffer) {
+                resetStreamTextBuffer(inferenceId);
+            }
+
+            if (typeof data.delta === 'string') {
+                streamTextBuffer += data.delta;
+            } else if (typeof data.text === 'string') {
+                streamTextBuffer = data.text;
+            }
+
+            return streamTextBuffer;
+        }
+
+        function finalizeStreamText(data) {
+            const inferenceId = getStreamInferenceId(data.metrics, true);
+            const text = typeof data.text === 'string' ? data.text : streamTextBuffer;
+            streamTextBuffer = text;
+            streamTextInferenceId = inferenceId;
+            return text;
+        }
+
         // Auto-apply processing mode on change
         processMode.addEventListener('change', () => {
             const mode = processMode.value;
@@ -4421,6 +4465,7 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
                 const data = JSON.parse(event.data);
 
                 if (data.type === 'vlm_stream') {
+                    const streamText = appendStreamDelta(data);
                     streamingActive = true;
                     const browserStreamIntervalMs = updateBrowserStreamInterval(data.metrics, receivedAtMs);
                     recordTriggerMetrics(data.type, data, receivedAtMs, browserStreamIntervalMs);
@@ -4428,11 +4473,11 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
                         finalizeTriggerRoundTrip();
                     }
 
-                    updateResultText(data.text);
-                    lastText = data.text;
+                    updateResultText(streamText);
+                    lastText = streamText;
 
                     // Update video overlay (always, visibility is controlled by CSS)
-                    videoOverlay.textContent = data.text;
+                    videoOverlay.textContent = streamText;
 
                     if (data.metrics) {
                         metricsInline.style.display = 'flex';
@@ -4442,6 +4487,7 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
                         countValue.textContent = data.metrics.total_inferences || 0;
                     }
                 } else if (data.type === 'vlm_stream_done') {
+                    const streamText = finalizeStreamText(data);
                     streamingActive = false;
                     recordTriggerMetrics(data.type, data, receivedAtMs, null);
                     finalizeTriggerToStreamDone(receivedAtMs, data.metrics);
@@ -4451,9 +4497,9 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
                         finalizeTriggerRoundTrip();
                     }
 
-                    updateResultText(data.text);
-                    lastText = data.text;
-                    videoOverlay.textContent = data.text;
+                    updateResultText(streamText);
+                    lastText = streamText;
+                    videoOverlay.textContent = streamText;
 
                     if (data.metrics) {
                         metricsInline.style.display = 'flex';
@@ -4464,6 +4510,7 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
                     }
                 } else if (data.type === 'vlm_response') {
                     streamingActive = false;
+                    resetStreamTextBuffer();
                     recordTriggerMetrics(data.type, data, receivedAtMs, null);
                     finalizeBrowserStreamIntervalAverage();
                     resetBrowserStreamInterval(false);
@@ -4883,6 +4930,7 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
             resultText.classList.remove('fade');
             videoOverlay.textContent = '';
             lastText = '';
+            resetStreamTextBuffer();
             recordTriggerStatus({
                 status: 'stopped',
                 inference_id: pendingTriggerInferenceId

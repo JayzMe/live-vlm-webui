@@ -469,14 +469,15 @@ def broadcast_stream_update(text: str, delta: str, metrics: dict, done: bool = F
     if not websockets:
         return
 
-    message = json.dumps(
-        {
-            "type": "vlm_stream_done" if done else "vlm_stream",
-            "text": text,
-            "delta": delta,
-            "metrics": metrics,
-        }
-    )
+    payload = {
+        "type": "vlm_stream_done" if done else "vlm_stream",
+        "delta": delta,
+        "metrics": metrics,
+    }
+    if done:
+        payload["text"] = text
+
+    message = json.dumps(payload)
 
     dead_websockets = set()
     for ws in websockets:
