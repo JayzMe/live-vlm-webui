@@ -1939,10 +1939,11 @@ limitations under the License.
                         <div class="settings-item">
                             <div>
                                 <div class="settings-item-label">Trigger Log</div>
-                                <div class="settings-item-description"><span id="triggerLogCount">0</span> entries stored in this browser</div>
+                                <div class="settings-item-description"><span id="triggerLogCount">0</span> traces available for export</div>
                             </div>
                             <div class="settings-actions">
-                                <button class="btn btn-secondary" id="exportTriggerLogBtn" type="button">Export</button>
+                                <button class="btn btn-secondary" id="exportTriggerLogBtn" type="button">Analysis Report</button>
+                                <button class="btn btn-secondary" id="debugExportTriggerLogBtn" type="button">Debug Export</button>
                                 <button class="btn btn-secondary" id="clearTriggerLogBtn" type="button">Clear</button>
                             </div>
                         </div>
@@ -2940,6 +2941,7 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
         const triggerLogToggle = document.getElementById('triggerLogToggle');
         const triggerLogCount = document.getElementById('triggerLogCount');
         const exportTriggerLogBtn = document.getElementById('exportTriggerLogBtn');
+        const debugExportTriggerLogBtn = document.getElementById('debugExportTriggerLogBtn');
         const clearTriggerLogBtn = document.getElementById('clearTriggerLogBtn');
         const overlayPosition = document.getElementById('overlayPosition');
         const layoutOrder = document.getElementById('layoutOrder');
@@ -3081,6 +3083,9 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
             if (exportTriggerLogBtn) {
                 exportTriggerLogBtn.disabled = !hasEntries;
             }
+            if (debugExportTriggerLogBtn) {
+                debugExportTriggerLogBtn.disabled = !hasEntries;
+            }
             if (clearTriggerLogBtn) {
                 clearTriggerLogBtn.disabled = triggerLogEntries.length === 0;
             }
@@ -3118,6 +3123,10 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
             return Number.isFinite(value) ? Math.round(value * 1000) / 1000 : null;
         }
 
+        function finiteMs(value) {
+            return Number.isFinite(value) ? roundMs(value) : null;
+        }
+
         function timestampDeltaMs(laterTimestamp, earlierTimestamp) {
             const laterMs = Date.parse(laterTimestamp);
             const earlierMs = Date.parse(earlierTimestamp);
@@ -3127,19 +3136,25 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
             return roundMs(laterMs - earlierMs);
         }
 
-        function computeTimeSinceTriggerSent(entry, receivePerformanceMs, receivedAt) {
-            if (
-                Number.isFinite(receivePerformanceMs)
-                && Number.isFinite(entry.trigger_sent_performance_ms)
-            ) {
-                const performanceDeltaMs = roundMs(receivePerformanceMs - entry.trigger_sent_performance_ms);
+        function computeLogDeltaMs(laterPerformanceMs, laterTimestamp, earlierPerformanceMs, earlierTimestamp) {
+            if (Number.isFinite(laterPerformanceMs) && Number.isFinite(earlierPerformanceMs)) {
+                const performanceDeltaMs = roundMs(laterPerformanceMs - earlierPerformanceMs);
                 if (performanceDeltaMs !== null && performanceDeltaMs >= 0) {
                     return performanceDeltaMs;
                 }
             }
 
-            const timestampDelta = timestampDeltaMs(receivedAt, entry.trigger_sent_at);
+            const timestampDelta = timestampDeltaMs(laterTimestamp, earlierTimestamp);
             return timestampDelta !== null && timestampDelta >= 0 ? timestampDelta : null;
+        }
+
+        function computeTimeSinceTriggerSent(entry, receivePerformanceMs, receivedAt) {
+            return computeLogDeltaMs(
+                receivePerformanceMs,
+                receivedAt,
+                entry.trigger_sent_performance_ms,
+                entry.trigger_sent_at
+            );
         }
 
         function logEventTimestampMs(event, timestampKey = 'timestamp') {
@@ -3338,6 +3353,14 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
             const activeInferenceId = Number(activeEntry.inference_id);
             const messageInferenceId = Number(inferenceId);
             if (
+                pendingTriggerInferenceId !== null
+                && Number.isFinite(messageInferenceId)
+                && messageInferenceId > 0
+                && messageInferenceId !== pendingTriggerInferenceId
+            ) {
+                return null;
+            }
+            if (
                 Number.isFinite(activeInferenceId)
                 && Number.isFinite(messageInferenceId)
                 && activeInferenceId > 0
@@ -3473,6 +3496,18 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
             const activeInferenceId = metrics ? Number(metrics.active_inference_id) : NaN;
             const completedInferenceId = metrics ? Number(metrics.last_completed_inference_id) : NaN;
             const inferenceId = isFinalMessage ? completedInferenceId : activeInferenceId;
+
+            if (
+                isFinalMessage
+                && triggerPending
+                && (
+                    pendingTriggerInferenceId === null
+                    || !Number.isFinite(completedInferenceId)
+                    || completedInferenceId !== pendingTriggerInferenceId
+                )
+            ) {
+                return;
+            }
 
             let entry = getTriggerLogEntryForMessage(inferenceId);
             if (!entry && messageType === 'vlm_stream') {
@@ -3690,17 +3725,165 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
             return mergedEntries.filter(shouldExportLogEntry);
         }
 
-        function exportTriggerLog() {
-            if (!triggerLogEntries.length) {
-                return;
+        function getFirstStatusEvent(entry, status) {
+            return (entry.statuses || []).find(item => item.status === status) || null;
+        }
+
+        function metricEventMatchesEntry(entry, event) {
+            if (!event || typeof event !== 'object') {
+                return false;
             }
 
-            const payload = {
-                exported_at: new Date().toISOString(),
-                app: 'live-vlm-webui',
-                schema: 'trigger-metrics-log-v10',
-                entries: getExportLogEntries()
+            const inferenceId = Number(entry.inference_id);
+            if (!Number.isFinite(inferenceId) || inferenceId <= 0) {
+                return true;
+            }
+
+            const metrics = event.metrics || {};
+            if (event.message_type === 'vlm_stream') {
+                return Number(metrics.active_inference_id) === inferenceId;
+            }
+            if (event.message_type === 'vlm_stream_done' || event.message_type === 'vlm_response') {
+                return Number(metrics.last_completed_inference_id) === inferenceId;
+            }
+
+            return true;
+        }
+
+        function getLastMetricEvent(entry, messageType) {
+            const events = (entry.metrics_events || [])
+                .filter(item => item.message_type === messageType && metricEventMatchesEntry(entry, item));
+            return events.length ? events[events.length - 1] : null;
+        }
+
+        function compactStreamIntervals(entry) {
+            return (entry.browser_stream_intervals || []).map(item => ({
+                sequence: item.sequence ?? null,
+                receive_offset_ms: finiteMs(item.time_since_trigger_sent_ms),
+                interval_ms: finiteMs(item.inter_packet_interval_ms),
+                delta_chars: Number.isFinite(item.delta_chars) ? item.delta_chars : null,
+                accumulated_chars: Number.isFinite(item.accumulated_text_chars) ? item.accumulated_text_chars : null
+            }));
+        }
+
+        function createAnalysisTrace(entry) {
+            ensureTriggerLogEntryShape(entry);
+
+            const requestedStatus = getFirstStatusEvent(entry, 'requested');
+            const startedStatus = getFirstStatusEvent(entry, 'started');
+            const firstStream = entry.browser_stream_intervals[0] || null;
+            const streamDone = getLastMetricEvent(entry, 'vlm_stream_done');
+            const finalResponse = getLastMetricEvent(entry, 'vlm_response');
+            const triggerSentAt = entry.trigger_sent_at || entry.requested_at || requestedStatus?.timestamp || null;
+            const triggerSentPerformanceMs = Number.isFinite(entry.trigger_sent_performance_ms)
+                ? entry.trigger_sent_performance_ms
+                : Number.isFinite(entry.requested_performance_ms)
+                ? entry.requested_performance_ms
+                : requestedStatus?.performance_ms ?? null;
+            const firstStreamAt = firstStream?.received_at ?? null;
+            const firstStreamPerformanceMs = firstStream?.receive_performance_ms ?? null;
+            const streamDoneAt = streamDone?.timestamp ?? null;
+            const streamDonePerformanceMs = streamDone?.performance_ms ?? null;
+            const finalResponseAt = finalResponse?.timestamp ?? null;
+            const finalResponsePerformanceMs = finalResponse?.performance_ms ?? null;
+            const triggerToFirstStreamMs = computeLogDeltaMs(
+                firstStreamPerformanceMs,
+                firstStreamAt,
+                triggerSentPerformanceMs,
+                triggerSentAt
+            );
+            const triggerToStartedMs = computeLogDeltaMs(
+                startedStatus?.performance_ms,
+                startedStatus?.timestamp,
+                triggerSentPerformanceMs,
+                triggerSentAt
+            );
+            const startedToFirstStreamMs = computeLogDeltaMs(
+                firstStreamPerformanceMs,
+                firstStreamAt,
+                startedStatus?.performance_ms,
+                startedStatus?.timestamp
+            );
+            const triggerToStreamDoneMs = finiteMs(entry.trigger_to_stream_done_ms)
+                ?? computeLogDeltaMs(
+                    streamDonePerformanceMs,
+                    streamDoneAt,
+                    triggerSentPerformanceMs,
+                    triggerSentAt
+                );
+            const streamDurationMs = computeLogDeltaMs(
+                streamDonePerformanceMs ?? entry.last_stream_receive_ms,
+                streamDoneAt,
+                firstStreamPerformanceMs,
+                firstStreamAt
+            );
+            const finalResponseLagMs = computeLogDeltaMs(
+                finalResponsePerformanceMs,
+                finalResponseAt,
+                streamDonePerformanceMs,
+                streamDoneAt
+            );
+
+            return {
+                log_id: entry.log_id,
+                log_session_id: entry.log_session_id,
+                performance_time_origin_ms: entry.performance_time_origin_ms,
+                inference_id: entry.inference_id,
+                status: entry.status,
+                trigger: {
+                    sent_at: triggerSentAt,
+                    sent_performance_ms: finiteMs(triggerSentPerformanceMs),
+                    started_at: startedStatus?.timestamp ?? null,
+                    started_performance_ms: finiteMs(startedStatus?.performance_ms),
+                    status: startedStatus ? 'started' : entry.status
+                },
+                stream: {
+                    first_receive_at: firstStreamAt,
+                    first_receive_performance_ms: finiteMs(firstStreamPerformanceMs),
+                    done_at: streamDoneAt,
+                    done_performance_ms: finiteMs(streamDonePerformanceMs),
+                    final_response_at: finalResponseAt,
+                    final_response_performance_ms: finiteMs(finalResponsePerformanceMs),
+                    message_count: entry.stream_message_count,
+                    intervals: compactStreamIntervals(entry),
+                    interval_stats: entry.browser_stream_interval_stats
+                },
+                latency: {
+                    trigger_to_started_ms: triggerToStartedMs,
+                    started_to_first_stream_ms: startedToFirstStreamMs,
+                    trigger_to_first_stream_ms: triggerToFirstStreamMs,
+                    trigger_round_trip_ms: finiteMs(entry.trigger_round_trip_ms),
+                    trigger_to_stream_done_ms: triggerToStreamDoneMs,
+                    stream_duration_ms: streamDurationMs,
+                    final_response_lag_ms: finalResponseLagMs
+                },
+                metadata: cloneForLog(entry.metadata)
             };
+        }
+
+        function summarizeAnalysisTraces(traces) {
+            const completed = traces.filter(trace => trace.status === 'completed').length;
+            const totalStreamMessages = traces.reduce((sum, trace) => sum + (trace.stream.message_count || 0), 0);
+            const triggerToFirstValues = traces
+                .map(trace => trace.latency.trigger_to_first_stream_ms)
+                .filter(Number.isFinite);
+            const triggerToDoneValues = traces
+                .map(trace => trace.latency.trigger_to_stream_done_ms)
+                .filter(Number.isFinite);
+            return {
+                trace_count: traces.length,
+                completed_count: completed,
+                total_stream_messages: totalStreamMessages,
+                avg_trigger_to_first_stream_ms: triggerToFirstValues.length
+                    ? roundMs(triggerToFirstValues.reduce((sum, value) => sum + value, 0) / triggerToFirstValues.length)
+                    : null,
+                avg_trigger_to_stream_done_ms: triggerToDoneValues.length
+                    ? roundMs(triggerToDoneValues.reduce((sum, value) => sum + value, 0) / triggerToDoneValues.length)
+                    : null
+            };
+        }
+
+        function downloadJsonPayload(payload, filenamePrefix) {
             const blob = new Blob([JSON.stringify(payload, null, 2)], {
                 type: 'application/json'
             });
@@ -3708,11 +3891,44 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
             const link = document.createElement('a');
             const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
             link.href = url;
-            link.download = `live-vlm-trigger-log-${timestamp}.json`;
+            link.download = `${filenamePrefix}-${timestamp}.json`;
             document.body.appendChild(link);
             link.click();
             link.remove();
             URL.revokeObjectURL(url);
+        }
+
+        function exportAnalysisReport() {
+            const entries = getExportLogEntries();
+            if (!entries.length) {
+                return;
+            }
+
+            const traces = entries.map(createAnalysisTrace);
+            const payload = {
+                exported_at: new Date().toISOString(),
+                app: 'live-vlm-webui',
+                schema: 'trigger-analysis-report-v1',
+                source_schema: 'trigger-metrics-log-v10',
+                summary: summarizeAnalysisTraces(traces),
+                traces
+            };
+            downloadJsonPayload(payload, 'live-vlm-analysis-report');
+        }
+
+        function exportDebugTriggerLog() {
+            const entries = getExportLogEntries();
+            if (!entries.length) {
+                return;
+            }
+
+            const payload = {
+                exported_at: new Date().toISOString(),
+                app: 'live-vlm-webui',
+                schema: 'trigger-metrics-log-v10',
+                entries
+            };
+            downloadJsonPayload(payload, 'live-vlm-trigger-debug-log');
         }
 
         function clearTriggerLog() {
@@ -3809,7 +4025,8 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
             }
         });
 
-        exportTriggerLogBtn.addEventListener('click', exportTriggerLog);
+        exportTriggerLogBtn.addEventListener('click', exportAnalysisReport);
+        debugExportTriggerLogBtn.addEventListener('click', exportDebugTriggerLog);
         clearTriggerLogBtn.addEventListener('click', clearTriggerLog);
 
         colorfulFocusToggle.addEventListener('change', (e) => {

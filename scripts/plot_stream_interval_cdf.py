@@ -55,17 +55,11 @@ def percentile(sorted_values: list[float], quantile: float) -> float:
     return sorted_values[lower] * (1 - weight) + sorted_values[upper] * weight
 
 
-def format_percentile_label(quantile: float) -> str:
-    percentile_value = quantile * 100
-    return f"p{percentile_value:g}"
-
-
 def plot_cdf(
     series: list[tuple[str, list[float]]],
     output_path: Path,
     title: str,
     x_limit: float | None,
-    percentile_quantiles: list[float],
 ) -> None:
     try:
         import matplotlib.pyplot as plt
@@ -82,28 +76,18 @@ def plot_cdf(
         sorted_values = sorted(values)
         y_values = [(item_index + 1) / len(sorted_values) for item_index in range(len(sorted_values))]
         color = color_cycle[index % len(color_cycle)] if color_cycle else None
-        legend_label = f"{label} (n={len(sorted_values)})"
+        p50 = percentile(sorted_values, 0.5)
+        p95 = percentile(sorted_values, 0.95)
+        legend_label = f"{label} (n={len(sorted_values)}, p50={p50:.1f} ms, p95={p95:.1f} ms)"
         line = ax.step(sorted_values, y_values, where="post", linewidth=2, label=legend_label, color=color)[0]
 
-        for quantile in percentile_quantiles:
-            percentile_value = percentile(sorted_values, quantile)
+        for quantile, linestyle, linewidth in ((0.5, "--", 1.2), (0.95, ":", 1.6)):
             ax.axvline(
-                percentile_value,
+                percentile(sorted_values, quantile),
                 color=line.get_color(),
-                linestyle="--" if quantile <= 0.5 else ":",
-                linewidth=1,
+                linestyle=linestyle,
+                linewidth=linewidth,
                 alpha=0.65,
-            )
-            ax.text(
-                percentile_value,
-                min(0.98, quantile + 0.02),
-                f"{label} {format_percentile_label(quantile)}={percentile_value:.1f}",
-                color=line.get_color(),
-                fontsize=7,
-                rotation=90,
-                va="top",
-                ha="right",
-                alpha=0.85,
             )
 
     ax.set_title(title)
@@ -147,7 +131,7 @@ def parse_args() -> argparse.Namespace:
         type=float,
         nargs="+",
         default=[50, 95],
-        help="Percentiles to mark for each file. Defaults to 50 95.",
+        help=argparse.SUPPRESS,
     )
     return parser.parse_args()
 
@@ -155,9 +139,8 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     try:
-        percentile_quantiles = [value / 100 for value in args.percentiles]
-        if any(value <= 0 or value >= 1 for value in percentile_quantiles):
-            print("Percentiles must be between 0 and 100, exclusive.", file=sys.stderr)
+        if [round(value, 6) for value in args.percentiles] != [50, 95]:
+            print("Only p50 and p95 markers are supported.", file=sys.stderr)
             return 1
 
         series = []
@@ -173,7 +156,7 @@ def main() -> int:
             print("No numeric inter_packet_interval_ms values found.", file=sys.stderr)
             return 1
 
-        plot_cdf(series, args.output, args.title, args.x_limit, percentile_quantiles)
+        plot_cdf(series, args.output, args.title, args.x_limit)
     except (OSError, ValueError, RuntimeError) as error:
         print(error, file=sys.stderr)
         return 1
