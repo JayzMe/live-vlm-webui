@@ -2947,6 +2947,14 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
         const gpuUpdateInterval = document.getElementById('gpuUpdateInterval');
         const TRIGGER_LOG_STORAGE_KEY = 'triggerInferenceLog';
         const MAX_TRIGGER_LOG_ENTRIES = 5000;
+        const TRIGGER_LOG_SESSION_ID = (
+            window.crypto && typeof window.crypto.randomUUID === 'function'
+        )
+            ? window.crypto.randomUUID()
+            : `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+        const PERFORMANCE_TIME_ORIGIN_MS = Number.isFinite(performance.timeOrigin)
+            ? Math.round(performance.timeOrigin * 1000) / 1000
+            : null;
 
         // Settings state
         const settings = {
@@ -2994,6 +3002,12 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
             }
             if (!Array.isArray(entry.browser_stream_intervals)) {
                 entry.browser_stream_intervals = [];
+            }
+            if (entry.log_session_id === undefined) {
+                entry.log_session_id = null;
+            }
+            if (!Number.isFinite(entry.performance_time_origin_ms)) {
+                entry.performance_time_origin_ms = null;
             }
             if (!entry.trigger_sent_at && entry.requested_at) {
                 entry.trigger_sent_at = entry.requested_at;
@@ -3126,6 +3140,21 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
 
             const timestampDelta = timestampDeltaMs(receivedAt, entry.trigger_sent_at);
             return timestampDelta !== null && timestampDelta >= 0 ? timestampDelta : null;
+        }
+
+        function logEventTimestampMs(event, timestampKey = 'timestamp') {
+            const timestamp = event ? event[timestampKey] : null;
+            const parsed = Date.parse(timestamp);
+            return Number.isFinite(parsed) ? parsed : null;
+        }
+
+        function compareLogEvents(a, b, performanceKey = 'performance_ms', timestampKey = 'timestamp') {
+            const aTimestampMs = logEventTimestampMs(a, timestampKey);
+            const bTimestampMs = logEventTimestampMs(b, timestampKey);
+            if (aTimestampMs !== null && bTimestampMs !== null && aTimestampMs !== bTimestampMs) {
+                return aTimestampMs - bTimestampMs;
+            }
+            return (a?.[performanceKey] || 0) - (b?.[performanceKey] || 0);
         }
 
         function compactMetricsForLog(metrics) {
@@ -3326,6 +3355,8 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
             const apiBaseField = document.getElementById('apiBaseUrl');
             const entry = {
                 log_id: `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+                log_session_id: TRIGGER_LOG_SESSION_ID,
+                performance_time_origin_ms: PERFORMANCE_TIME_ORIGIN_MS,
                 status,
                 inference_id: inferenceId,
                 requested_at: stamp.timestamp,
@@ -3544,6 +3575,12 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
                 target.inference_id = sourceInferenceId;
             }
 
+            if (!target.log_session_id && source.log_session_id) {
+                target.log_session_id = source.log_session_id;
+            }
+            if (!Number.isFinite(target.performance_time_origin_ms) && Number.isFinite(source.performance_time_origin_ms)) {
+                target.performance_time_origin_ms = source.performance_time_origin_ms;
+            }
             if (!target.trigger_sent_at && source.trigger_sent_at) {
                 target.trigger_sent_at = source.trigger_sent_at;
             }
@@ -3566,17 +3603,17 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
             target.statuses = uniqueBy(
                 [...target.statuses, ...source.statuses],
                 item => `${item.performance_ms}:${item.status}:${item.inference_id}`
-            ).sort((a, b) => (a.performance_ms || 0) - (b.performance_ms || 0));
+            ).sort((a, b) => compareLogEvents(a, b));
 
             target.metrics_events = uniqueBy(
                 [...target.metrics_events, ...source.metrics_events],
                 item => `${item.performance_ms}:${item.message_type}`
-            ).sort((a, b) => (a.performance_ms || 0) - (b.performance_ms || 0));
+            ).sort((a, b) => compareLogEvents(a, b));
 
             target.browser_stream_intervals = uniqueBy(
                 [...target.browser_stream_intervals, ...source.browser_stream_intervals],
                 item => `${item.receive_performance_ms}:${item.delta_chars}:${item.accumulated_text_chars}`
-            ).sort((a, b) => (a.receive_performance_ms || 0) - (b.receive_performance_ms || 0));
+            ).sort((a, b) => compareLogEvents(a, b, 'receive_performance_ms', 'received_at'));
 
             target.browser_stream_intervals.forEach((item, index) => {
                 item.sequence = index + 1;
@@ -3609,19 +3646,40 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
             return entry.statuses.some(statusEvent => retainedStatuses.has(statusEvent.status));
         }
 
+        function getLogMergeKey(entry) {
+            const inferenceId = Number(entry.inference_id);
+            if (!Number.isFinite(inferenceId) || inferenceId <= 0) {
+                return null;
+            }
+
+            if (entry.log_session_id) {
+                return `${inferenceId}:session:${entry.log_session_id}`;
+            }
+
+            if (Number.isFinite(entry.performance_time_origin_ms)) {
+                return `${inferenceId}:origin:${entry.performance_time_origin_ms}`;
+            }
+
+            if (entry.log_id) {
+                return `${inferenceId}:entry:${entry.log_id}`;
+            }
+
+            return null;
+        }
+
         function getExportLogEntries() {
             const mergedEntries = [];
-            const byInferenceId = new Map();
+            const byMergeKey = new Map();
 
             for (const rawEntry of triggerLogEntries) {
                 const entry = ensureTriggerLogEntryShape(cloneForLog(rawEntry));
-                const inferenceId = Number(entry.inference_id);
-                if (Number.isFinite(inferenceId) && inferenceId > 0) {
-                    const existing = byInferenceId.get(inferenceId);
+                const mergeKey = getLogMergeKey(entry);
+                if (mergeKey) {
+                    const existing = byMergeKey.get(mergeKey);
                     if (existing) {
                         mergeLogEntryInto(existing, entry);
                     } else {
-                        byInferenceId.set(inferenceId, entry);
+                        byMergeKey.set(mergeKey, entry);
                         mergedEntries.push(entry);
                     }
                 } else {
@@ -3640,7 +3698,7 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
             const payload = {
                 exported_at: new Date().toISOString(),
                 app: 'live-vlm-webui',
-                schema: 'trigger-metrics-log-v9',
+                schema: 'trigger-metrics-log-v10',
                 entries: getExportLogEntries()
             };
             const blob = new Blob([JSON.stringify(payload, null, 2)], {
@@ -4500,11 +4558,11 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
             return false;
         }
 
-        function finalizeTriggerRoundTrip() {
+        function finalizeTriggerRoundTrip(finalReceivedAtMs = performance.now()) {
             if (!triggerPending || triggerStartTime === null) {
                 return null;
             }
-            const elapsedMs = performance.now() - triggerStartTime;
+            const elapsedMs = finalReceivedAtMs - triggerStartTime;
             if (triggerLatencyValue) {
                 triggerLatencyValue.textContent = Math.round(elapsedMs);
             }
@@ -5028,7 +5086,7 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
                     recordTriggerMetrics(data.type, data, receivedAtMs, browserStreamIntervalMs);
                     addResponseTimelineEvent(data.type, receivedAtMs, data.metrics);
                     if (shouldFinalizeTriggerRoundTrip(data.type, data.metrics)) {
-                        finalizeTriggerRoundTrip();
+                        finalizeTriggerRoundTrip(receivedAtMs);
                     }
 
                     updateResultText(streamText);
@@ -5053,7 +5111,7 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
                     finalizeBrowserStreamIntervalAverage();
                     resetBrowserStreamInterval(false);
                     if (shouldFinalizeTriggerRoundTrip(data.type, data.metrics)) {
-                        finalizeTriggerRoundTrip();
+                        finalizeTriggerRoundTrip(receivedAtMs);
                     }
 
                     updateResultText(streamText);
@@ -5075,7 +5133,7 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
                     finalizeBrowserStreamIntervalAverage();
                     resetBrowserStreamInterval(false);
                     if (shouldFinalizeTriggerRoundTrip(data.type, data.metrics)) {
-                        finalizeTriggerRoundTrip();
+                        finalizeTriggerRoundTrip(receivedAtMs);
                     }
                     // Trigger animations for new messages based on settings
                     if (data.text !== lastText) {
