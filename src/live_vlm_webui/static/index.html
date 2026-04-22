@@ -3012,11 +3012,17 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
                 }
                 if (
                     !Number.isFinite(item.time_since_trigger_sent_ms)
-                    && Number.isFinite(item.receive_performance_ms)
-                    && Number.isFinite(entry.trigger_sent_performance_ms)
                 ) {
-                    item.time_since_trigger_sent_ms = roundMs(
-                        item.receive_performance_ms - entry.trigger_sent_performance_ms
+                    item.time_since_trigger_sent_ms = computeTimeSinceTriggerSent(
+                        entry,
+                        item.receive_performance_ms,
+                        item.received_at
+                    );
+                } else if (item.time_since_trigger_sent_ms < 0) {
+                    item.time_since_trigger_sent_ms = computeTimeSinceTriggerSent(
+                        entry,
+                        item.receive_performance_ms,
+                        item.received_at
                     );
                 }
                 if (
@@ -3098,6 +3104,30 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
             return Number.isFinite(value) ? Math.round(value * 1000) / 1000 : null;
         }
 
+        function timestampDeltaMs(laterTimestamp, earlierTimestamp) {
+            const laterMs = Date.parse(laterTimestamp);
+            const earlierMs = Date.parse(earlierTimestamp);
+            if (!Number.isFinite(laterMs) || !Number.isFinite(earlierMs)) {
+                return null;
+            }
+            return roundMs(laterMs - earlierMs);
+        }
+
+        function computeTimeSinceTriggerSent(entry, receivePerformanceMs, receivedAt) {
+            if (
+                Number.isFinite(receivePerformanceMs)
+                && Number.isFinite(entry.trigger_sent_performance_ms)
+            ) {
+                const performanceDeltaMs = roundMs(receivePerformanceMs - entry.trigger_sent_performance_ms);
+                if (performanceDeltaMs !== null && performanceDeltaMs >= 0) {
+                    return performanceDeltaMs;
+                }
+            }
+
+            const timestampDelta = timestampDeltaMs(receivedAt, entry.trigger_sent_at);
+            return timestampDelta !== null && timestampDelta >= 0 ? timestampDelta : null;
+        }
+
         function compactMetricsForLog(metrics) {
             if (!metrics || typeof metrics !== 'object') {
                 return null;
@@ -3139,6 +3169,7 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
                     ? event.browser_stream_interval_ms
                     : null,
                 time_since_trigger_sent_ms: Number.isFinite(event.time_since_trigger_sent_ms)
+                    && event.time_since_trigger_sent_ms >= 0
                     ? event.time_since_trigger_sent_ms
                     : null,
                 metrics: compactMetricsForLog(event.metrics)
@@ -3438,11 +3469,14 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
                     ? browserStreamIntervalMs
                     : fallbackIntervalMs
             );
-            const timeSinceTriggerSentMs = Number.isFinite(entry.trigger_sent_performance_ms)
-                ? roundMs(receivedAtMs - entry.trigger_sent_performance_ms)
-                : null;
+            const eventStamp = nowLogStamp(receivedAtMs);
+            const timeSinceTriggerSentMs = computeTimeSinceTriggerSent(
+                entry,
+                receivedAtMs,
+                eventStamp.timestamp
+            );
             const event = {
-                ...nowLogStamp(receivedAtMs),
+                ...eventStamp,
                 message_type: messageType,
                 browser_stream_interval_ms: intervalMs,
                 time_since_trigger_sent_ms: timeSinceTriggerSentMs,
@@ -3546,6 +3580,11 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
 
             target.browser_stream_intervals.forEach((item, index) => {
                 item.sequence = index + 1;
+                item.time_since_trigger_sent_ms = computeTimeSinceTriggerSent(
+                    target,
+                    item.receive_performance_ms,
+                    item.received_at
+                );
             });
             target.stream_message_count = target.browser_stream_intervals.length;
             target.first_stream_receive_ms = target.browser_stream_intervals[0]?.receive_performance_ms ?? null;
