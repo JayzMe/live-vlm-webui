@@ -2995,6 +2995,14 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
             if (!Array.isArray(entry.browser_stream_intervals)) {
                 entry.browser_stream_intervals = [];
             }
+            if (!entry.trigger_sent_at && entry.requested_at) {
+                entry.trigger_sent_at = entry.requested_at;
+            }
+            if (!Number.isFinite(entry.trigger_sent_performance_ms)) {
+                entry.trigger_sent_performance_ms = Number.isFinite(entry.requested_performance_ms)
+                    ? entry.requested_performance_ms
+                    : null;
+            }
             entry.browser_stream_intervals.forEach(item => {
                 if (!item || typeof item !== 'object') {
                     return;
@@ -3219,6 +3227,8 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
                 inference_id: inferenceId,
                 requested_at: stamp.timestamp,
                 requested_performance_ms: stamp.performance_ms,
+                trigger_sent_at: stamp.timestamp,
+                trigger_sent_performance_ms: stamp.performance_ms,
                 trigger_round_trip_ms: null,
                 trigger_to_stream_done_ms: null,
                 first_stream_receive_ms: null,
@@ -3422,6 +3432,12 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
                 target.inference_id = sourceInferenceId;
             }
 
+            if (!target.trigger_sent_at && source.trigger_sent_at) {
+                target.trigger_sent_at = source.trigger_sent_at;
+            }
+            if (!Number.isFinite(target.trigger_sent_performance_ms) && Number.isFinite(source.trigger_sent_performance_ms)) {
+                target.trigger_sent_performance_ms = source.trigger_sent_performance_ms;
+            }
             if (target.trigger_round_trip_ms === null && source.trigger_round_trip_ms !== null) {
                 target.trigger_round_trip_ms = source.trigger_round_trip_ms;
             }
@@ -3507,7 +3523,7 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
             const payload = {
                 exported_at: new Date().toISOString(),
                 app: 'live-vlm-webui',
-                schema: 'trigger-metrics-log-v7',
+                schema: 'trigger-metrics-log-v8',
                 entries: getExportLogEntries()
             };
             const blob = new Blob([JSON.stringify(payload, null, 2)], {
