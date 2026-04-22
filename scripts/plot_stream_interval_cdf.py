@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Plot a CDF of browser stream inter-packet intervals."""
+"""Plot CDFs of browser stream inter-packet intervals."""
 
 from __future__ import annotations
 
@@ -9,6 +9,10 @@ import json
 import sys
 from pathlib import Path
 from typing import Any
+
+
+def default_label(path: Path) -> str:
+    return path.stem
 
 
 def load_interval_values(path: Path) -> list[float]:
@@ -51,7 +55,18 @@ def percentile(sorted_values: list[float], quantile: float) -> float:
     return sorted_values[lower] * (1 - weight) + sorted_values[upper] * weight
 
 
-def plot_cdf(values: list[float], output_path: Path, title: str, x_limit: float | None) -> None:
+def format_percentile_label(quantile: float) -> str:
+    percentile_value = quantile * 100
+    return f"p{percentile_value:g}"
+
+
+def plot_cdf(
+    series: list[tuple[str, list[float]]],
+    output_path: Path,
+    title: str,
+    x_limit: float | None,
+    percentile_quantiles: list[float],
+) -> None:
     try:
         import matplotlib.pyplot as plt
     except ImportError as error:
@@ -60,11 +75,37 @@ def plot_cdf(values: list[float], output_path: Path, title: str, x_limit: float 
             "uv run --with matplotlib scripts/plot_stream_interval_cdf.py ..."
         ) from error
 
-    sorted_values = sorted(values)
-    y_values = [(index + 1) / len(sorted_values) for index in range(len(sorted_values))]
-
     fig, ax = plt.subplots(figsize=(7.5, 4.5))
-    ax.step(sorted_values, y_values, where="post", linewidth=2)
+    color_cycle = plt.rcParams["axes.prop_cycle"].by_key().get("color", [])
+
+    for index, (label, values) in enumerate(series):
+        sorted_values = sorted(values)
+        y_values = [(item_index + 1) / len(sorted_values) for item_index in range(len(sorted_values))]
+        color = color_cycle[index % len(color_cycle)] if color_cycle else None
+        legend_label = f"{label} (n={len(sorted_values)})"
+        line = ax.step(sorted_values, y_values, where="post", linewidth=2, label=legend_label, color=color)[0]
+
+        for quantile in percentile_quantiles:
+            percentile_value = percentile(sorted_values, quantile)
+            ax.axvline(
+                percentile_value,
+                color=line.get_color(),
+                linestyle="--" if quantile <= 0.5 else ":",
+                linewidth=1,
+                alpha=0.65,
+            )
+            ax.text(
+                percentile_value,
+                min(0.98, quantile + 0.02),
+                f"{label} {format_percentile_label(quantile)}={percentile_value:.1f}",
+                color=line.get_color(),
+                fontsize=7,
+                rotation=90,
+                va="top",
+                ha="right",
+                alpha=0.85,
+            )
+
     ax.set_title(title)
     ax.set_xlabel("Browser stream inter-packet interval (ms)")
     ax.set_ylabel("CDF")
@@ -72,12 +113,7 @@ def plot_cdf(values: list[float], output_path: Path, title: str, x_limit: float 
     ax.grid(True, alpha=0.3)
     if x_limit is not None:
         ax.set_xlim(0, x_limit)
-
-    p50 = percentile(sorted_values, 0.5)
-    p95 = percentile(sorted_values, 0.95)
-    ax.axvline(p50, color="tab:orange", linestyle="--", linewidth=1, label=f"p50={p50:.1f} ms")
-    ax.axvline(p95, color="tab:red", linestyle="--", linewidth=1, label=f"p95={p95:.1f} ms")
-    ax.legend(loc="lower right")
+    ax.legend(loc="lower right", fontsize=8)
 
     fig.tight_layout()
     fig.savefig(output_path, dpi=160)
@@ -88,7 +124,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Plot a CDF from stream interval rows extracted by extract_stream_intervals.py."
     )
-    parser.add_argument("input", type=Path, help="Extracted CSV or JSON interval file.")
+    parser.add_argument("input", type=Path, nargs="+", help="One or more extracted CSV or JSON interval files.")
     parser.add_argument(
         "-o",
         "--output",
@@ -106,22 +142,47 @@ def parse_args() -> argparse.Namespace:
         type=float,
         help="Optional x-axis upper bound in milliseconds.",
     )
+    parser.add_argument(
+        "--percentiles",
+        type=float,
+        nargs="+",
+        default=[50, 95],
+        help="Percentiles to mark for each file. Defaults to 50 95.",
+    )
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
     try:
-        values = load_interval_values(args.input)
-        if not values:
+        percentile_quantiles = [value / 100 for value in args.percentiles]
+        if any(value <= 0 or value >= 1 for value in percentile_quantiles):
+            print("Percentiles must be between 0 and 100, exclusive.", file=sys.stderr)
+            return 1
+
+        series = []
+        skipped = []
+        for input_path in args.input:
+            values = load_interval_values(input_path)
+            if values:
+                series.append((default_label(input_path), values))
+            else:
+                skipped.append(input_path)
+
+        if not series:
             print("No numeric inter_packet_interval_ms values found.", file=sys.stderr)
             return 1
-        plot_cdf(values, args.output, args.title, args.x_limit)
+
+        plot_cdf(series, args.output, args.title, args.x_limit, percentile_quantiles)
     except (OSError, ValueError, RuntimeError) as error:
         print(error, file=sys.stderr)
         return 1
 
-    print(f"Wrote {args.output} with {len(values)} intervals.")
+    total_intervals = sum(len(values) for _, values in series)
+    print(f"Wrote {args.output} with {total_intervals} intervals from {len(series)} file(s).")
+    if skipped:
+        skipped_names = ", ".join(str(path) for path in skipped)
+        print(f"Skipped files with no numeric intervals: {skipped_names}", file=sys.stderr)
     return 0
 
 
