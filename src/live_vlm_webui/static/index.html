@@ -2827,6 +2827,18 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
             if (!Array.isArray(entry.browser_stream_intervals)) {
                 entry.browser_stream_intervals = [];
             }
+            entry.browser_stream_intervals.forEach(item => {
+                if (!item || typeof item !== 'object') {
+                    return;
+                }
+                if (
+                    !Number.isFinite(item.accumulated_text_chars)
+                    && Number.isFinite(item.text_chars)
+                ) {
+                    item.accumulated_text_chars = item.text_chars;
+                }
+                delete item.text_chars;
+            });
             if (!Number.isFinite(entry.stream_message_count)) {
                 entry.stream_message_count = entry.browser_stream_intervals.length;
             }
@@ -3202,7 +3214,7 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
                         ? 'browser_stream_display'
                         : 'request_log_receive_time',
                     delta_chars: typeof data.delta === 'string' ? data.delta.length : null,
-                    text_chars: typeof data.text === 'string' ? data.text.length : null
+                    accumulated_text_chars: streamTextBuffer.length
                 });
                 entry.browser_stream_interval_stats = summarizeBrowserStreamIntervals(entry);
                 if (entry.first_stream_receive_ms === null) {
@@ -3267,7 +3279,7 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
 
             target.browser_stream_intervals = uniqueBy(
                 [...target.browser_stream_intervals, ...source.browser_stream_intervals],
-                item => `${item.receive_performance_ms}:${item.delta_chars}:${item.text_chars}`
+                item => `${item.receive_performance_ms}:${item.delta_chars}:${item.accumulated_text_chars}`
             ).sort((a, b) => (a.receive_performance_ms || 0) - (b.receive_performance_ms || 0));
 
             target.browser_stream_intervals.forEach((item, index) => {
@@ -3327,7 +3339,7 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
             const payload = {
                 exported_at: new Date().toISOString(),
                 app: 'live-vlm-webui',
-                schema: 'trigger-metrics-log-v6',
+                schema: 'trigger-metrics-log-v7',
                 entries: getExportLogEntries()
             };
             const blob = new Blob([JSON.stringify(payload, null, 2)], {
