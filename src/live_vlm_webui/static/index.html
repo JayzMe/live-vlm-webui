@@ -3003,9 +3003,27 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
                     ? entry.requested_performance_ms
                     : null;
             }
+            entry.statuses = entry.statuses
+                .filter(item => item && typeof item === 'object')
+                .map(normalizeStatusEvent);
             entry.browser_stream_intervals.forEach(item => {
                 if (!item || typeof item !== 'object') {
                     return;
+                }
+                if (
+                    !Number.isFinite(item.time_since_trigger_sent_ms)
+                    && Number.isFinite(item.receive_performance_ms)
+                    && Number.isFinite(entry.trigger_sent_performance_ms)
+                ) {
+                    item.time_since_trigger_sent_ms = roundMs(
+                        item.receive_performance_ms - entry.trigger_sent_performance_ms
+                    );
+                }
+                if (
+                    item.interval_source === 'request_log_receive_time'
+                    && !Number.isFinite(item.inter_packet_interval_ms)
+                ) {
+                    item.interval_source = 'first_stream_no_previous_packet';
                 }
                 if (
                     !Number.isFinite(item.accumulated_text_chars)
@@ -3080,6 +3098,58 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
             return Number.isFinite(value) ? Math.round(value * 1000) / 1000 : null;
         }
 
+        function compactMetricsForLog(metrics) {
+            if (!metrics || typeof metrics !== 'object') {
+                return null;
+            }
+
+            const compact = {};
+            [
+                'active_inference_id',
+                'last_completed_inference_id',
+                'last_latency_ms',
+                'ttft_ms',
+                'avg_latency_ms',
+                'total_inferences'
+            ].forEach(key => {
+                if (metrics[key] !== undefined) {
+                    compact[key] = metrics[key];
+                }
+            });
+            return Object.keys(compact).length ? compact : null;
+        }
+
+        function normalizeStatusEvent(event) {
+            return {
+                timestamp: event.timestamp || null,
+                performance_ms: Number.isFinite(event.performance_ms) ? event.performance_ms : null,
+                status: event.status || 'unknown',
+                inference_id: Number.isFinite(Number(event.inference_id))
+                    ? Number(event.inference_id)
+                    : null
+            };
+        }
+
+        function normalizeMetricsEvent(event) {
+            const normalized = {
+                timestamp: event.timestamp || null,
+                performance_ms: Number.isFinite(event.performance_ms) ? event.performance_ms : null,
+                message_type: event.message_type || 'unknown',
+                browser_stream_interval_ms: Number.isFinite(event.browser_stream_interval_ms)
+                    ? event.browser_stream_interval_ms
+                    : null,
+                time_since_trigger_sent_ms: Number.isFinite(event.time_since_trigger_sent_ms)
+                    ? event.time_since_trigger_sent_ms
+                    : null,
+                metrics: compactMetricsForLog(event.metrics)
+            };
+
+            if (!normalized.metrics) {
+                delete normalized.metrics;
+            }
+            return normalized;
+        }
+
         function percentile(sortedValues, percentileValue) {
             if (!sortedValues.length) {
                 return null;
@@ -3145,7 +3215,9 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
             return uniqueBy(
                 [firstStreamEvent, lastStreamDoneEvent, lastResponseEvent].filter(Boolean),
                 item => `${item.performance_ms}:${item.message_type}`
-            ).sort((a, b) => (a.performance_ms || 0) - (b.performance_ms || 0));
+            )
+                .map(normalizeMetricsEvent)
+                .sort((a, b) => (a.performance_ms || 0) - (b.performance_ms || 0));
         }
 
         function shouldKeepMetricsEvent(messageType, entry) {
@@ -3287,12 +3359,11 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
             }
 
             entry.status = data.status || 'unknown';
-            entry.statuses.push({
+            entry.statuses.push(normalizeStatusEvent({
                 ...nowLogStamp(),
                 status: entry.status,
-                inference_id: entry.inference_id,
-                raw: cloneForLog(data)
-            });
+                inference_id: entry.inference_id
+            }));
 
             if (entry.status !== 'started') {
                 entry.completed_at = new Date().toISOString();
@@ -3367,11 +3438,15 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
                     ? browserStreamIntervalMs
                     : fallbackIntervalMs
             );
+            const timeSinceTriggerSentMs = Number.isFinite(entry.trigger_sent_performance_ms)
+                ? roundMs(receivedAtMs - entry.trigger_sent_performance_ms)
+                : null;
             const event = {
                 ...nowLogStamp(receivedAtMs),
                 message_type: messageType,
                 browser_stream_interval_ms: intervalMs,
-                metrics: cloneForLog(metrics)
+                time_since_trigger_sent_ms: timeSinceTriggerSentMs,
+                metrics: compactMetricsForLog(metrics)
             };
 
             if (shouldKeepMetricsEvent(messageType, entry)) {
@@ -3388,9 +3463,12 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
                     received_at: event.timestamp,
                     receive_performance_ms: event.performance_ms,
                     inter_packet_interval_ms: intervalMs,
-                    interval_source: Number.isFinite(browserStreamIntervalMs)
+                    interval_source: !Number.isFinite(intervalMs)
+                        ? 'first_stream_no_previous_packet'
+                        : Number.isFinite(browserStreamIntervalMs)
                         ? 'browser_stream_display'
                         : 'request_log_receive_time',
+                    time_since_trigger_sent_ms: timeSinceTriggerSentMs,
                     delta_chars: typeof data.delta === 'string' ? data.delta.length : null,
                     accumulated_text_chars: streamTextBuffer.length
                 });
@@ -3523,7 +3601,7 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
             const payload = {
                 exported_at: new Date().toISOString(),
                 app: 'live-vlm-webui',
-                schema: 'trigger-metrics-log-v8',
+                schema: 'trigger-metrics-log-v9',
                 entries: getExportLogEntries()
             };
             const blob = new Blob([JSON.stringify(payload, null, 2)], {

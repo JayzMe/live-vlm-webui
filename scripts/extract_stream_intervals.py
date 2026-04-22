@@ -23,6 +23,7 @@ FIELDNAMES = [
     "receive_performance_ms",
     "inter_packet_interval_ms",
     "interval_source",
+    "time_since_trigger_sent_ms",
     "delta_chars",
     "accumulated_text_chars",
 ]
@@ -97,6 +98,7 @@ def extract_rows(path: Path, include_null_intervals: bool = False) -> list[dict[
                         "receive_performance_ms": interval.get("receive_performance_ms"),
                         "inter_packet_interval_ms": interval_ms,
                         "interval_source": interval.get("interval_source"),
+                        "time_since_trigger_sent_ms": interval.get("time_since_trigger_sent_ms"),
                         "delta_chars": interval.get("delta_chars"),
                         "accumulated_text_chars": accumulated_chars,
                     }
